@@ -360,3 +360,43 @@ describe('second code-review round', () => {
     }
   })
 })
+
+describe('container and VM CLIs are not sandbox-contained', () => {
+  // Their work is performed by a daemon outside this process's filesystem
+  // sandbox, so the "unrecognized commands are contained" premise is false for
+  // them. `docker info` succeeds from inside the Seatbelt profile, confirming
+  // the socket is reachable.
+  it('denies host-reaching or privileged container work', () => {
+    for (const source of [
+      'docker run --rm -v /:/host alpine rm -rf /host/work',
+      'docker run --privileged alpine sh',
+      'docker run --pid=host alpine ps aux',
+      'docker run --network=host alpine sh',
+      'docker run --mount type=bind,source=/etc,target=/host alpine sh',
+      'docker run --volume=/:/host alpine sh',
+      'podman run --rm -v /:/h alpine sh',
+    ]) {
+      expect(assess(source), source).toMatchObject({ decision: 'deny', classifierEligible: false })
+    }
+  })
+
+  it('reviews container execution, including an in-workspace bind mount', () => {
+    // A bind mount into the workspace is not a fast path either: the container
+    // image is fetched and executed outside the sandbox, the same reason `npx`
+    // is already escalated.
+    for (const source of [
+      'docker run --rm alpine sh',
+      'docker exec -it box sh',
+      'docker compose up -d',
+      'docker run --rm -v /work/repo/dist:/app alpine ls /app',
+    ]) {
+      expect(assess(source), source).toMatchObject({ decision: 'ask', classifierEligible: true })
+    }
+  })
+
+  it('keeps container state inspection on the fast path', () => {
+    for (const source of ['docker ps', 'docker images', 'docker --version']) {
+      expect(assess(source), source).toMatchObject({ decision: 'allow', classifierEligible: false })
+    }
+  })
+})
