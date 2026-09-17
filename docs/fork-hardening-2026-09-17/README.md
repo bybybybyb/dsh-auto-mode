@@ -118,12 +118,12 @@ Reviewed, judged not reachable in this deployment, and left alone:
 ## 6. Verification
 
 ```
-pnpm verify          # typecheck + build + 199 tests + package contract
+pnpm verify          # typecheck + build + 205 tests + package contract
 ```
 
-New tests live in `tests/fail-open-regressions.spec.ts`: 31 cases, most of them
+New tests live in `tests/fail-open-regressions.spec.ts`: 37 cases, most of them
 direct/wrapped pairs, plus the protected-metadata and compatibility-matrix
-invariants. The suite went from 168 passing to 199 passing with no upstream
+invariants. The suite went from 168 passing to 205 passing with no upstream
 test modified.
 
 One claim from adversarial review did **not** reproduce and is not "fixed":
@@ -160,6 +160,31 @@ Also corrected: the depth-cap test was malformed shell and never reached the
 cap (it escalated through the opaque branch instead), and `sensitiveMarker`
 had a missing `|` that silently nested the API-key alternative inside the path
 group — `AWS_ACCESS_KEY_ID` matched only by accident, via words like `secrets`.
+
+A third pass, over the commits the earlier reviewers never saw, closed the
+findings they had raised against the first revision:
+
+- `require('child_process').execSync('…')` — the canonical Node spelling puts
+  the module in a string, so the `child_process\.\w+(` alternative never
+  matched and bare `exec`/`execSync`/`spawn` were not listed at all; those
+  calls were silent allows while `os.system(…)` was denied.
+- A dotenv read nested in `$(…)`, backticks, or a subshell was allowed because
+  the marker's trailing boundary omitted `)`, the backtick, `;`, `|`, `>`, `<`,
+  and `,`.
+- Credential directories required a *trailing* separator, so wrapping the
+  dotted directory in `cp -r ~/.ssh /tmp/k` or `tar czf … ~/.ssh` skipped the
+  marker entirely.
+- Three regexes backtracked quadratically on a whitespace run (two adjacent
+  quantifiers over overlapping sets). A 200 KB payload blocked the
+  pre-execute hook for ~40 s; it now costs ~1 ms.
+- Two introduced false positives: an operator class containing parentheses made
+  quoted prose such as a commit message with `(sudo)` an unrecoverable hard
+  deny, and the widened boundary escalated ordinary searches for the word
+  "credentials".
+- A file-consuming reader whose operands arrive on a pipe is now reviewed:
+  `find . -name '*.env' | xargs cat` otherwise fast-pathed exactly what a direct
+  `cat .env` reviews. This deliberately adds a review step to routine pipelines
+  such as `ls | xargs grep TODO`.
 
 ## 8. Known remaining gaps
 
