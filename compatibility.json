@@ -8,6 +8,10 @@
       "track": "recommended"
     },
     {
+      "version": "0.1.5-rc.2",
+      "track": "compatible"
+    },
+    {
       "version": "0.1.2-rc.1",
       "track": "legacy"
     },

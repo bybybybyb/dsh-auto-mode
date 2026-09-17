@@ -19,11 +19,14 @@ Coding agents need broad access to build, test, and inspect a project without st
 `dsh-auto-mode` adds the missing middle ground. Routine project work runs directly inside the official `workspace-write` sandbox, only semantic risks outside that boundary are classified using the current DSH model and the direct user's instructions, genuine ambiguity asks once, and destructive access to critical paths is denied before execution.
 
 > [!IMPORTANT]
-> Plugin `0.1.9` supports the exact Harness versions below. The recommended host is `0.1.5-rc.1`, the current npm `latest`; it is still a host prerelease. Earlier plugin releases declared support only up to `0.1.2-rc.1`, which is why installing on `0.1.5-rc.1` failed. Updating the plugin does not upgrade the running host. Mixed DSH dependency cohorts are unsupported.
+> Plugin `0.1.9` supports the exact Harness versions below. The recommended host is `0.1.5-rc.1` (npm `latest`); `0.1.5-rc.2` (npm `next`) is also supported, because that is the cohort a `latest` install actually resolves — see the warning below. Earlier plugin releases declared support only up to `0.1.2-rc.1`, which is why installing on `0.1.5-rc.1` failed. Updating the plugin does not upgrade the running host. Mixed DSH dependency cohorts are unsupported.
+>
+> **`dsh --version` does not tell you which cohort you run.** The `@deepseek-ai/dsh` CLI is pinned to `0.1.5-rc.1`, but its dependency ranges are caret ranges, so they resolve up to the newest matching prerelease — `0.1.5-rc.2`. Reading only `dsh --version` therefore reports `0.1.5-rc.1` while `@deepseek-ai/dsh-permission-presets` and friends are `0.1.5-rc.2`. Check the resolved packages, not the CLI banner, before concluding a host is unsupported.
 
 | Harness host | Plugin | Pair |
 | --- | --- | --- |
 | `0.1.5-rc.1` | `0.1.9` | Recommended |
+| `0.1.5-rc.2` | `0.1.9` | Compatible (this fork) |
 | `0.1.2-rc.1` | `0.1.9` | Retained compatibility |
 | `0.1.2-alpha.5` | `0.1.9` | Retained compatibility |
 | `0.1.2-alpha.3` | `0.1.9` | Retained compatibility |
@@ -31,7 +34,7 @@ Coding agents need broad access to build, test, and inspect a project without st
 | `0.1.1-rc.2` | Historical `0.1.5` | Unsupported by `0.1.6` and later; migrate to a pair above for redundant sandbox recovery |
 | Other versions | Undeclared | Require full host validation first |
 
-[compatibility.json](./compatibility.json) defines the exact matrix. See the [maintenance record](./docs/maintenance-2026-09-06/README.md) for earlier diagnosis and fixes, the [0.1.5-rc.1 upgrade record](./docs/harness-0.1.5-rc.1-upgrade-2026-09-14/README.md) for this release, and the [historical Alpha acceptance report](./docs/alpha2-acceptance.md) for older evidence.
+[compatibility.json](./compatibility.json) defines the exact matrix. See the [maintenance record](./docs/maintenance-2026-09-06/README.md) for earlier diagnosis and fixes, the [0.1.5-rc.1 upgrade record](./docs/harness-0.1.5-rc.1-upgrade-2026-09-14/README.md) for that release, the [fork hardening record](./docs/fork-hardening-2026-09-17/README.md) for the fail-open fixes in this fork, and the [historical Alpha acceptance report](./docs/alpha2-acceptance.md) for older evidence.
 
 ### npm
 
