@@ -19,11 +19,14 @@ Coding Agent 需要足够大的权限才能持续构建、测试和检查项目�
 `dsh-auto-mode` 补上了中间层。日常项目操作直接在官方 `workspace-write` 沙箱内执行；沙箱覆盖不了的语义风险才结合当前 DSH 模型与用户原话分类；真正不明确的动作只询问一次；破坏关键路径的操作则在执行前直接拒绝。
 
 > [!IMPORTANT]
-> 插件 `0.1.9` 支持下表中的精确 Harness 版本。推荐 `0.1.5-rc.1`（当前 npm `latest`），宿主仍为预发布版本。此前插件只声明到 `0.1.2-rc.1`，因此在 `0.1.5-rc.1` 上安装会直接失败。升级插件不会升级正在运行的宿主，混装 DSH 依赖也不属于受支持配置。
+> 插件 `0.1.9` 支持下表中的精确 Harness 版本。推荐 `0.1.5-rc.1`（npm `latest`）；同时支持 `0.1.5-rc.2`（npm `next`），因为那正是 `latest` 安装实际解析出的依赖组合——见下方警告。此前插件只声明到 `0.1.2-rc.1`，因此在 `0.1.5-rc.1` 上安装会直接失败。升级插件不会升级正在运行的宿主，混装 DSH 依赖也不属于受支持配置。
+>
+> **`dsh --version` 并不能说明你实际运行的依赖组合。** `@deepseek-ai/dsh` CLI 固定在 `0.1.5-rc.1`，但其依赖使用 caret 范围，会解析到同元组下最新的预发布版本 `0.1.5-rc.2`。因此只读 `dsh --version` 会显示 `0.1.5-rc.1`，而 `@deepseek-ai/dsh-permission-presets` 等包实际是 `0.1.5-rc.2`。判断宿主是否受支持前，请检查实际解析出的包，而不是 CLI 版本号。
 
 | Harness 宿主 | 插件 | 配对 |
 | --- | --- | --- |
 | `0.1.5-rc.1` | `0.1.9` | 推荐 |
+| `0.1.5-rc.2` | `0.1.9` | 兼容（本 fork） |
 | `0.1.2-rc.1` | `0.1.9` | 保留兼容 |
 | `0.1.2-alpha.5` | `0.1.9` | 保留兼容 |
 | `0.1.2-alpha.3` | `0.1.9` | 保留兼容 |
@@ -31,7 +34,7 @@ Coding Agent 需要足够大的权限才能持续构建、测试和检查项目�
 | `0.1.1-rc.2` | 历史版本 `0.1.5` | `0.1.6` 及之后不再支持；旧版冗余沙箱参数问题请迁移上述配对 |
 | 其他版本 | 未声明 | 需先通过完整宿主验证 |
 
-精确版本由 [compatibility.json](./compatibility.json) 管理。此前的诊断与修复见 [维护记录](./docs/maintenance-2026-09-06/README.md)，本次升级见 [0.1.5-rc.1 升级记录](./docs/harness-0.1.5-rc.1-upgrade-2026-09-14/README.md)。更早的验证见 [Alpha 验收报告](./docs/alpha2-acceptance.md)。
+精确版本由 [compatibility.json](./compatibility.json) 管理。此前的诊断与修复见 [维护记录](./docs/maintenance-2026-09-06/README.md)，`0.1.5-rc.1` 升级见 [0.1.5-rc.1 升级记录](./docs/harness-0.1.5-rc.1-upgrade-2026-09-14/README.md)，本 fork 的 fail-open 修复见 [fork 加固记录](./docs/fork-hardening-2026-09-17/README.md)。更早的验证见 [Alpha 验收报告](./docs/alpha2-acceptance.md)。
 
 ### npm
 
