@@ -1219,6 +1219,71 @@ function assessRedirections(base: Assessment, segment: ShellSegment, shell: Shel
   return allowed(base.reason, [...new Set(plannedCreates)], [...(base.filesystemEffects ?? []), ...writeEffects])
 }
 
+/**
+ * Container and VM CLIs. Their work is done by a daemon that runs *outside*
+ * this process's filesystem sandbox, so the usual "an unrecognized command is
+ * contained by `workspace-write`" reasoning does not hold for them: a bind
+ * mount or a privileged container reaches the host directly. `docker info`
+ * succeeds from inside the macOS Seatbelt profile, which confirms the socket
+ * is reachable.
+ */
+const CONTAINER_CLIS = new Set(['docker', 'podman', 'nerdctl', 'ctr', 'crictl', 'lima', 'limactl', 'colima', 'multipass'])
+
+/** Container subcommands that execute or fetch code rather than inspect state. */
+const CONTAINER_EXEC_SUBCOMMANDS = new Set([
+  'run', 'create', 'exec', 'build', 'compose', 'up', 'pull', 'push',
+  'cp', 'import', 'load', 'commit', 'start', 'restart', 'system', 'machine', 'pod',
+])
+
+/** Flags that hand the container host access or elevated privileges outright. */
+const CONTAINER_PRIVILEGED_FLAG = /^(?:--privileged|--pid[=:]host|--net(?:work)?[=:]host|--userns[=:]host|--ipc[=:]host|--uts[=:]host|--cgroupns[=:]host|--cap-add|--device|--security-opt)$/i
+
+/** Host path a bind-mount token exposes, or `undefined` when it is not a bind. */
+function containerMountSource(token: string, next: CommandWord | undefined): CommandWord | undefined {
+  let spec: CommandWord | undefined
+  if (/^(?:-v|--volume|--mount)$/i.test(token)) spec = next
+  else if (/^--(?:volume|mount)=/i.test(token)) spec = { ...(next as CommandWord), text: token.slice(token.indexOf('=') + 1) }
+  if (spec === undefined) return undefined
+  const text = spec.text
+  if (/^type=(?!bind)/i.test(text)) return undefined
+  const keyed = /(?:^|,)(?:source|src)=([^,]+)/i.exec(text)
+  const source = keyed?.[1] ?? text.split(':')[0]
+  if (source === undefined || source === '' || !source.startsWith('/')) return undefined
+  return { ...spec, text: source }
+}
+
+/**
+ * Judge one container invocation.
+ *
+ * Returns `undefined` for read-only inspection (`docker ps`) so ordinary
+ * state queries keep the fast path.
+ */
+function containerAssessment(name: string, words: readonly CommandWord[], roots: PolicyRoots): Assessment | undefined {
+  const tokens = words.map(word => word.text)
+  if (tokens.slice(1).some(token => CONTAINER_PRIVILEGED_FLAG.test(token))) {
+    return denied(`container escape: ${name} is asked to run with host access or elevated privileges, and its work happens outside the filesystem sandbox`)
+  }
+  for (let index = 1; index < words.length; index += 1) {
+    const source = containerMountSource((words[index] as CommandWord).text, words[index + 1])
+    if (source === undefined) continue
+    if (source.dynamic || source.glob) {
+      return semanticReview(`container bind mount of a dynamically named host path cannot be inspected: ${source.text}`)
+    }
+    const normalized = normalizePath(source.text, roots.workspace, roots.home)
+    const critical = hardDestructiveTargetReason(normalized, roots)
+    if (critical !== undefined) {
+      return denied(`container escape: ${name} bind-mounts ${critical}`)
+    }
+    if (!isWithin(roots.workspace, normalized) && !roots.tempRoots.some(root => isWithin(root, normalized))) {
+      return semanticReview(`container bind mount of a host path outside the workspace requires specific user authorization: ${normalized}`)
+    }
+  }
+  const subcommand = tokens[1]?.toLowerCase() ?? ''
+  return CONTAINER_EXEC_SUBCOMMANDS.has(subcommand)
+    ? semanticReview(`container or VM work runs outside the filesystem sandbox and needs specific user authorization: ${name} ${subcommand}`)
+    : undefined
+}
+
 function classifyEffectiveCommand(
   name: string,
   words: readonly CommandWord[],
@@ -1326,6 +1391,10 @@ function classifyEffectiveCommand(
   }
   if (/^(?:dropdb|createdb|psql|mysql|mongosh|redis-cli|kubectl|terraform|ansible|systemctl|launchctl)$/.test(name)) {
     return semanticReview(`database, service, or infrastructure operation requires specific user authorization: ${name}`)
+  }
+  if (CONTAINER_CLIS.has(name)) {
+    const verdict = containerAssessment(name, words, roots)
+    if (verdict !== undefined) return verdict
   }
   // Piped operands remove the argument text from the command line, so the
   // recognized-effect checks above still had to run first: `echo x | xargs curl
