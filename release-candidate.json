@@ -1,15 +1,16 @@
 {
-  "version": "0.1.9",
-  "artifactSha256": "1094c9fae16f7ff94164cba70bcb2160837978d31014b79537d3f00c1f12e464",
+  "version": "0.1.10",
+  "artifactSha256": "7b123e67cb93aea8f74d9e5989e63fd467efa642050b4ada7198709a226b67e3",
   "node": "24.20.0",
   "npm": "11.19.0",
-  "verifiedAt": "2026-09-14T02:00:00.000Z",
+  "verifiedAt": "2026-09-21T09:56:30.105Z",
   "realApiPassed": true,
   "realApiProvider": "deepseek-official",
   "realApiModel": "deepseek-flash",
   "workspace": "/tmp",
-  "realApiRequests": 20,
+  "realApiRequests": 17,
   "supportedHosts": [
+    "0.1.5-rc.2",
     "0.1.5-rc.1",
     "0.1.2-rc.1",
     "0.1.2-alpha.5",
@@ -17,10 +18,11 @@
     "0.1.2-alpha.2"
   ],
   "evidence": [
-    "validation/0.1.9/fixture.json",
-    "validation/0.1.9/real-api.json",
-    "validation/0.1.9/web.json"
+    "validation/0.1.10/fixture.json",
+    "validation/0.1.10/real-api.json",
+    "validation/0.1.10/web.json"
   ],
   "packReproducedInCi": true,
-  "adversarialReview": "host surface unchanged across the supported range; differences confined to the dependency cohort, default tool composition and default model id; see VALIDATION.md for scope"
+  "adversarialReview": "Two independent reviewers found no blockers in the version guard, exact cohorts, package contract, recovery CLI and documentation. Target RC.2 doctor passed with 231 DSH packages. See VALIDATION.md.",
+  "ciRun": "https://github.com/NanmiCoder/dsh-auto-mode/actions/runs/35586199256"
 }

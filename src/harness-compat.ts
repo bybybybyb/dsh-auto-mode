@@ -14,7 +14,7 @@ export function assertHarnessCompatibility(): void {
   const versions = packages.map(name => ({ name, version: require(`@deepseek-ai/${name}/package.json`).version as string }))
   const version = versions[0]!.version
   if (!supportedHosts.some(host => host.version === version) || versions.some(entry => entry.version !== version)) {
-    throw new Error(`Auto Mode: unsupported or mixed Harness packages (${versions.map(entry => `${entry.name}@${entry.version}`).join(', ')}). Install a coherent DeepSeek Harness ${recommendedHost} runtime and restart the profile. Supported exact hosts: ${supportedHosts.map(host => host.version).join(', ')}. Harness 0.1.1-rc.2 uses current(events) and is not supported by this plugin.`)
+    throw new Error(`Auto Mode: unsupported or mixed Harness packages (${versions.map(entry => `${entry.name}@${entry.version}`).join(', ')}). Install a coherent DeepSeek Harness ${recommendedHost} runtime and restart the profile. Supported exact hosts: ${supportedHosts.map(host => host.version).join(', ')}. Unlisted releases (including Harness 0.1.6-alpha.*) are not supported. To recover startup without Auto Mode, remove @nanmicoder/dsh-auto-mode from the affected profile with dsh plugin --profile <name> remove @nanmicoder/dsh-auto-mode. Do not rename the auto preset alone or bypass this check.`)
   }
 }
 

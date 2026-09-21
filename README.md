@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@nanmicoder/dsh-auto-mode"><img src="https://img.shields.io/npm/v/@nanmicoder/dsh-auto-mode.svg" alt="npm version"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/npm/l/@nanmicoder/dsh-auto-mode.svg" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.1-202724" alt="See installation instructions for exact host compatibility">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-0.1.5--rc.2-202724" alt="See installation instructions for exact host compatibility">
 </p>
 
 ## Why Auto?
@@ -19,29 +19,40 @@ Coding agents need broad access to build, test, and inspect a project without st
 `dsh-auto-mode` adds the missing middle ground. Routine project work runs directly inside the official `workspace-write` sandbox, only semantic risks outside that boundary are classified using the current DSH model and the direct user's instructions, genuine ambiguity asks once, and destructive access to critical paths is denied before execution.
 
 > [!IMPORTANT]
-> Plugin `0.1.9` supports the exact Harness versions below. The recommended host is `0.1.5-rc.1`, the current npm `latest`; it is still a host prerelease. Earlier plugin releases declared support only up to `0.1.2-rc.1`, which is why installing on `0.1.5-rc.1` failed. Updating the plugin does not upgrade the running host. Mixed DSH dependency cohorts are unsupported.
+> Plugin `0.1.10` recommends Harness `0.1.5-rc.2`. We prioritize verified RC releases. Updating this plugin does not upgrade Harness: use an exact host below with a coherent DSH dependency cohort.
 
-| Harness host | Plugin | Pair |
+| Harness host | Plugin | Pairing |
 | --- | --- | --- |
-| `0.1.5-rc.1` | `0.1.9` | Recommended |
-| `0.1.2-rc.1` | `0.1.9` | Retained compatibility |
-| `0.1.2-alpha.5` | `0.1.9` | Retained compatibility |
-| `0.1.2-alpha.3` | `0.1.9` | Retained compatibility |
-| `0.1.2-alpha.2` | `0.1.9` | Retained compatibility |
-| `0.1.1-rc.2` | Historical `0.1.5` | Unsupported by `0.1.6` and later; migrate to a pair above for redundant sandbox recovery |
-| Other versions | Undeclared | Require full host validation first |
+| `0.1.5-rc.2` | `0.1.10` | Recommended |
+| `0.1.5-rc.1` | `0.1.10` | Retained compatibility |
+| `0.1.2-rc.1` | `0.1.10` | Retained compatibility |
+| `0.1.2-alpha.5`, `0.1.2-alpha.3`, `0.1.2-alpha.2` | `0.1.10` | Only these previously verified historical releases |
+| `0.1.6-alpha.*` | Unsupported | Requires separate adaptation; do not install this plugin |
+| Other versions | Undeclared | Require full host verification first |
 
-[compatibility.json](./compatibility.json) defines the exact matrix. See the [maintenance record](./docs/maintenance-2026-09-06/README.md) for earlier diagnosis and fixes, the [0.1.5-rc.1 upgrade record](./docs/harness-0.1.5-rc.1-upgrade-2026-09-14/README.md) for this release, and the [historical Alpha acceptance report](./docs/alpha2-acceptance.md) for older evidence.
+Historical Alpha support does not imply support for current or future Alphas. `latest`, `next`, and `alpha` are mutable tags, not compatibility promises. [compatibility.json](./compatibility.json) defines the exact matrix; see [VALIDATION.md](./VALIDATION.md) for acceptance results.
+
+### Upgrade and startup recovery
+
+Plugin `0.1.9` rejects Harness `0.1.5-rc.2` in its own version guard; upgrade to `0.1.10`. On `0.1.6-alpha.2`, Harness also reserves `auto`, so the old plugin's static preset prevents startup. Renaming only the YAML key does not update the mode the plugin recognizes and is not a complete fix.
+
+On an unsupported host, remove the plugin from the affected profile in an external terminal to restore startup (`web` below; substitute your TUI, headless, or custom profile name):
+
+```sh
+dsh plugin --profile web remove @nanmicoder/dsh-auto-mode
+```
+
+Unsupported versions still fail explicitly; the plugin never silently skips its approval policy. Before downgrading Harness, stop it, back up DSH data, and verify the older host can read existing sessions. Do not upgrade or downgrade Harness from a session running inside it.
 
 ### npm
 
 Check the actually running `dsh --version`, then install the plugin:
 
 ```sh
-dsh plugin --profile web add @nanmicoder/dsh-auto-mode
+dsh plugin --profile web add @nanmicoder/dsh-auto-mode@0.1.10
 ```
 
-This resolves npm `latest`, which is always the newest plugin release; pinning is unnecessary because compatibility is decided by the **host** version, and the plugin refuses a host outside the matrix above before the first user turn. `next` carries plugin prereleases. Neither tag implies arbitrary host compatibility. Git source installs build through `prepare` and require development dependencies and enabled install scripts. Registry packages already contain compiled output.
+The example pins the plugin version to avoid mutable-tag surprises. Check that your host appears in the matrix before updating. Git source installs build through `prepare` and require development dependencies and enabled install scripts. Registry packages already contain compiled output.
 
 ### Build from source
 
