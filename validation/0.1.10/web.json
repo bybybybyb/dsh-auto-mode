@@ -1,0 +1,27 @@
+{
+  "host": "0.1.5-rc.2",
+  "pluginVersion": "0.1.10",
+  "artifactSha256": "7b123e67cb93aea8f74d9e5989e63fd467efa642050b4ada7198709a226b67e3",
+  "provider": "deepseek-official",
+  "model": "deepseek-flash",
+  "workspace": "/tmp",
+  "browser": "Ego Lite",
+  "doctorPassed": true,
+  "autoAfterReload": true,
+  "iconAfterReload": true,
+  "replyAfterReload": true,
+  "cancelKeptPreset": true,
+  "confirmDisabledUntilAcknowledged": true,
+  "confirmEnabledAfterAcknowledgement": true,
+  "targetRemoved": true,
+  "siblingBytesUnchanged": true,
+  "requests": 5,
+  "classifierRequests": 1,
+  "tools": [
+    "bash",
+    "bash"
+  ],
+  "realUsage": true,
+  "noProviderError": true,
+  "clientBundleSha256": "8d819f5983c62e8cfde06aa146ff6250495212dbc4436fad9afc43f370bec62a"
+}

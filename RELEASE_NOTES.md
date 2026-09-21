@@ -1,3 +1,13 @@
+Auto Mode 0.1.10 supports Harness `0.1.5-rc.2`, the recommended RC pairing, while retaining all five previously supported exact hosts.
+
+- Fix startup on `0.1.5-rc.2`: version 0.1.9 rejected it in the plugin compatibility guard. The consumed RC permission, tool, approval, session and Web menu implementations are unchanged, so approval policy remains unchanged.
+- Pin the development dependency cohort and include RC.2 in the CI artifact matrix; add regression tests for RC.2, mixed cohorts and unverified versions.
+- Document exact installation commands, RC-first support and recovery with `dsh plugin --profile <name> remove @nanmicoder/dsh-auto-mode`.
+- Harness `0.1.6-alpha.*` is not supported. Alpha.2 reserves `auto`; renaming only the preset or bypassing the guard is not a fix. Unsupported versions remain fail-closed rather than silently leaving Auto without its policy.
+- Locally validated the same tarball through six exact Harness CLI cohorts, real DeepSeek API flows on RC.2, and the actual Web UI in Ego Lite. See VALIDATION.md and validation/0.1.10 for sanitized evidence. Windows and Linux checks run separately in CI.
+
+---
+
 Auto Mode 0.1.9 supports the exact Harness cohort `0.1.5-rc.1`, `0.1.2-rc.1`, `0.1.2-alpha.5`, `0.1.2-alpha.3`, and `0.1.2-alpha.2`. `0.1.5-rc.1` is the current npm `latest` host and is now the recommended pair; installs on it previously failed because the plugin declared support only up to `0.1.2-rc.1`. Use `dsh --version` to check the running host before upgrading the plugin. Harness `0.1.1-rc.2` must migrate to a supported pair; this release does not backport the old host API.
 
 - Support the exact `0.1.5-rc.1` host cohort. The resolved closure gained 17 packages and lost 4 relative to `0.1.2-rc.1`, so the override list was regenerated from the resolved graph rather than re-versioned in place. The previously failing `plugin tree failed to load ... unsupported or mixed Harness packages` report is reproduced and fixed.

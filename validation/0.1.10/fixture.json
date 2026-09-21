@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "kind": "real-harness-product-entry-with-deterministic-fixture",
+  "realApi": false,
+  "pluginVersion": "0.1.10",
+  "artifactSha256": "7b123e67cb93aea8f74d9e5989e63fd467efa642050b4ada7198709a226b67e3",
+  "packToolchain": {
+    "node": "24.20.0",
+    "npm": "11.19.0"
+  },
+  "workspace": "/tmp",
+  "matrix": [
+    {
+      "hostVersion": "0.1.5-rc.2",
+      "passed": true,
+      "assertions": 22,
+      "cohortPackages": 231,
+      "nodeVersion": "v26.7.0",
+      "reportSha256": "5bafa0aa50057cffa8f8952c4d621a194c02862268d815465e6e8cbb8c13d564",
+      "doctorSha256": "446caa5365048cc00b2729b09b4334bec702080e87d400f8712219c0985309d7"
+    },
+    {
+      "hostVersion": "0.1.5-rc.1",
+      "passed": true,
+      "assertions": 22,
+      "cohortPackages": 231,
+      "nodeVersion": "v26.7.0",
+      "reportSha256": "6577c98f90f69e764e2792375b07b60cbf55744ee5e5658badceaaf0f19e6b95",
+      "doctorSha256": "a5fedde2cd7cac9f3398e216c687eb96e3ccc033bf38f32974b04532df350f78"
+    },
+    {
+      "hostVersion": "0.1.2-rc.1",
+      "passed": true,
+      "assertions": 22,
+      "cohortPackages": 214,
+      "nodeVersion": "v26.7.0",
+      "reportSha256": "ce75eb6aba6041e1300f7f531c7af4c2e9ac2d244d2a87bde6297cf1e379a946",
+      "doctorSha256": "37ed462edb5ccd272162b34656e901b90896cf96d23b18b2c8549657b250b208"
+    },
+    {
+      "hostVersion": "0.1.2-alpha.5",
+      "passed": true,
+      "assertions": 22,
+      "cohortPackages": 214,
+      "nodeVersion": "v26.7.0",
+      "reportSha256": "6bfbb2e780caa199d65798377d597966a0a1e2bcf6ad7e24260e906d9ca892f5",
+      "doctorSha256": "619957a7a6c7e0bf592b60d9de016b1d8f0dfc3eaf3bb22bbc83395f1faf8309"
+    },
+    {
+      "hostVersion": "0.1.2-alpha.3",
+      "passed": true,
+      "assertions": 22,
+      "cohortPackages": 215,
+      "nodeVersion": "v26.7.0",
+      "reportSha256": "9f99c6e432c076ffc1870b3b1174c37b9a36f40ab1ccfe802fed34df4a3fc45d",
+      "doctorSha256": "0a798e32834d46f5c56c508d17ab1203d69f79318a396af4cdc4a83e6e4a1287"
+    },
+    {
+      "hostVersion": "0.1.2-alpha.2",
+      "passed": true,
+      "assertions": 22,
+      "cohortPackages": 215,
+      "nodeVersion": "v26.7.0",
+      "reportSha256": "2cf3b5d0c78238da7ecf642609b4831eb9c976bdc4b77a23651e107cb60b49b5",
+      "doctorSha256": "8d92449310bd3e08101bd4be6beefc31460fcdf15233c088c5d2ec782e87283f"
+    }
+  ]
+}

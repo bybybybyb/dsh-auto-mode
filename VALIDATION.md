@@ -1,3 +1,40 @@
+# 0.1.10 acceptance — Harness RC.2
+
+2026-09-21. Baseline: `d865109` / plugin 0.1.9. Reproduced before changes using the official npm tarball: coherent Harness 0.1.5-rc.2 exits 1 in the plugin's version guard; coherent 0.1.6-alpha.2 exits 1 in the host permission constructor (`"auto" is reserved and cannot name a configured preset`). RC.1 passes the existing product fixture. The fan's exact installed dependency graph remains unknown.
+
+## Changes and contract audit
+
+Recommend 0.1.5-rc.2, retain the previous five exact supported hosts, update exact development dependencies/overrides and the pnpm lockfile. CI derives its host matrix from compatibility.json. Runtime error text includes removal instructions; the guard remains fail-closed. README explains fixed versions, RC priority, historical Alpha exceptions and startup recovery. New 0.1.6-alpha releases are unsupported; the static Auto preset and workspace-write/ask policy have not been renamed or relaxed.
+
+Official installed RC.1 and RC.2 artifacts were compared: JS and declarations in permission-presets, tools, llm, session, user-approval, system-prompt, client-locale and client-ui-permission-presets are identical. An independent reviewer also compared bash-sandbox and fs-sandbox. Version-card coverage does not extend to this corridor; these conclusions come from exact npm artifacts and actual startup tests.
+
+Seven touchpoints: profile composition is exercised by the packaged CLI fixture; session events, services, guard/pipeline hooks and approvals by real tool calls; filesystem ownership and subprocess teardown by the fixture's file/canary/process assertions; UI by Ego Lite and a real model turn. The plugin has no custom network channel. There are no newly adopted host capabilities or policy API migrations.
+
+## Local validation
+
+All acceptance uses existing `/tmp`, isolated HOME/DSH_HOME, and the same artifact:
+
+`7b123e67cb93aea8f74d9e5989e63fd467efa642050b4ada7198709a226b67e3`
+
+Packed with Node 24.20.0 / npm 11.19.0. Local runtime tests use macOS / Node 26.7.0. Credentials, raw session logs and screenshots remain outside the repository. Committed evidence contains sanitized summaries only.
+
+- Initial baseline lacked node_modules; after frozen-lockfile installation, `pnpm verify` passed 190 tests, with five Windows-only tests skipped. No baseline product failures.
+- After changes: typecheck, build, package check and 200 tests passed; five Windows-only tests skipped.
+- Maintenance contract: six exact hosts, 120 unchanged vendored skill files. Doctor/release metadata scripts: 29 tests passed.
+- Packaged CLI fixture: 22 assertions on each of six exact hosts, all passed. Full dependency/identity and artifact checks passed; target RC.2 has 231 DSH packages. The fixture model is deterministic. [Evidence](validation/0.1.10/fixture.json).
+- RC.2 real API: 24 assertions passed over 17 real deepseek-official/deepseek-flash requests. Native editor create/replace/view; authorized deletion via classifier; redundant sandbox request rejection followed by an actually exercised fieldless retry; unauthorized deletion refusal; resistance to argument authority injection; sibling sentinel unchanged. [Evidence](validation/0.1.10/real-api.json).
+- RC.2 Web: existing /tmp workspace selected; four Chinese permission entries; risk dialog confirmation disabled until acknowledgement; cancel preserves workspace-write; confirmation selects Auto; actual bash deletion through one real classifier request; target absent and sibling bytes unchanged; Auto, icon and reply persist after reload. Five real requests, two bash calls. [Evidence](validation/0.1.10/web.json).
+
+## Independent review and limits
+
+Two independent adversarial reviewers found no blockers. Recovery command syntax was checked against both RC.2 and Alpha.2 CLI code: plugin removal runs independently of the failing profile and reconciles the bundle after uninstall. No global host or user profile was changed.
+
+The development pnpm store retains old RC.1 directories after upgrade; it is not used as runtime acceptance evidence. Isolated runtime doctors passed with exact cohorts, including an independent 231-package RC.2 audit.
+
+Not locally verified: Windows/PowerShell, Linux, migration/downgrade of real user sessions, or functionality on unsupported Alpha hosts. Cross-platform CI and byte-for-byte CI artifact comparison are pending at the time of this local record. Unsupported hosts still refuse startup with the plugin installed; this release documents recovery rather than claiming safe automatic deactivation.
+
+---
+
 # 0.1.9 acceptance
 
 Production and real API acceptance completed before this commit. Every run used the existing `/tmp` workspace (macOS resolves it to `/private/tmp`), so no workspace picker was involved. The npm candidate was packed from the frozen tree with Node **24.20.0** and npm **11.19.0** — the same toolchain the publish workflow uses — and that pack reproduced the CI tarball hash byte-for-byte. Its SHA-256 is:
