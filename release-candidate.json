@@ -22,6 +22,7 @@
     "validation/0.1.10/real-api.json",
     "validation/0.1.10/web.json"
   ],
-  "packReproducedInCi": false,
-  "adversarialReview": "Two independent reviewers found no blockers in the version guard, exact cohorts, package contract, recovery CLI and documentation. Target RC.2 doctor passed with 231 DSH packages. See VALIDATION.md."
+  "packReproducedInCi": true,
+  "adversarialReview": "Two independent reviewers found no blockers in the version guard, exact cohorts, package contract, recovery CLI and documentation. Target RC.2 doctor passed with 231 DSH packages. See VALIDATION.md.",
+  "ciRun": "https://github.com/NanmiCoder/dsh-auto-mode/actions/runs/35586199256"
 }

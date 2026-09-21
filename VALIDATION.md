@@ -31,7 +31,7 @@ Two independent adversarial reviewers found no blockers. Recovery command syntax
 
 The development pnpm store retains old RC.1 directories after upgrade; it is not used as runtime acceptance evidence. Isolated runtime doctors passed with exact cohorts, including an independent 231-package RC.2 audit.
 
-Not locally verified: Windows/PowerShell, Linux, migration/downgrade of real user sessions, or functionality on unsupported Alpha hosts. Cross-platform CI and byte-for-byte CI artifact comparison are pending at the time of this local record. Unsupported hosts still refuse startup with the plugin installed; this release documents recovery rather than claiming safe automatic deactivation.
+Not locally verified: Windows/PowerShell, Linux, migration/downgrade of real user sessions, or functionality on unsupported Alpha hosts. Cross-platform CI passed on Linux, macOS and Windows, as did all six Linux Harness CLI runs ([run 35586199256](https://github.com/NanmiCoder/dsh-auto-mode/actions/runs/35586199256)). The downloaded CI tarball matches the local real-API candidate byte-for-byte. Unsupported hosts still refuse startup with the plugin installed; this release documents recovery rather than claiming safe automatic deactivation.
 
 ---
 
