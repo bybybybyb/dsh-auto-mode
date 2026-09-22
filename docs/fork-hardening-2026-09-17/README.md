@@ -1,9 +1,18 @@
 # Fork hardening record — 2026-09-17
 
-This fork diverges from upstream `NanmiCoder/dsh-auto-mode` at commit `d865109`
-(`chore: release v0.1.9`) to fix (a) a hard load-time incompatibility with the
-host cohort npm actually installs and (b) fail-open paths in the shell
-analyzer found by adversarial review of `0.1.9`.
+This branch (`fix/fail-open-shell-gaps`) is rebased onto upstream `4953fdc`
+(`0.1.10`) and carries exactly one class of change: fail-open paths in the shell
+analyzer found by adversarial review of `0.1.9`, plus the protected-metadata
+depth fix they exposed.
+
+The earlier revision of this branch also pinned the `0.1.5-rc.2` host cohort.
+That half is **withdrawn**: upstream shipped the same support as `0.1.10`
+through PR #18, so this branch now takes upstream's `compatibility.json`,
+`package.json`, lockfile, release metadata and `README.md` unchanged and changes
+no version or compatibility declaration at all. The branch diff against
+`upstream/main` is limited to `src/shell.ts`, `src/paths.ts`,
+`tests/fail-open-regressions.spec.ts`, this record, and the one link to it from
+`README.md`.
 
 Nothing here is a redesign. The plugin's architecture — monotonic hard deny,
 deterministic first pass, model classifier as the last line of defense,
@@ -12,11 +21,18 @@ reviewed and kept. The changes close specific paths where a *fast-path allow*
 (`classifierEligible: false`) was reachable for effects the design says must be
 reviewed or denied.
 
-## 1. Host compatibility: `0.1.5-rc.2`
+## 1. Host compatibility: `0.1.5-rc.2` (withdrawn)
 
-Upstream `0.1.9` declares support only up to `0.1.5-rc.1`, so
+**This section is retained as diagnosis only; it is no longer part of the
+branch.** Upstream `0.1.10` (PR #18) added `0.1.5-rc.2` to `compatibility.json`,
+moved `recommendedHost` to it, regenerated the dependency cohort and recorded
+its own acceptance evidence, so duplicating the re-pin here would only produce a
+conflicting compatibility matrix.
+
+The reason the two version strings disagree on this machine is still worth
+knowing. Upstream `0.1.9` declared support only up to `0.1.5-rc.1`, so
 `assertHarnessCompatibility()` threw before the first user turn on the cohort
-this machine runs. The README's instruction to check the running host is
+this machine runs, and the README's instruction to check the running host was
 misleading here:
 
 ```
@@ -45,11 +61,9 @@ fbd3f2e34835...  fbd3f2e34835...   # dsh-user-approval:      identical
 f54d86572d4c...  f54d86572d4c...   # dsh-llm:                identical
 ```
 
-Accordingly `compatibility.json` gains `0.1.5-rc.2` (`track: "compatible"`)
-and the seven peer ranges gain the same version. `recommendedHost` stays
-`0.1.5-rc.1`, so the pinned dev/test cohort and upstream's validated
-acceptance path are unchanged — `scripts/verify-maintenance.mjs` enforces both
-invariants and passes.
+That was the whole basis for the withdrawn re-pin. On this branch
+`compatibility.json`, `package.json`, `pnpm-lock.yaml` and the validation
+records are upstream `0.1.10`'s, unmodified.
 
 ## 2. Fail-open paths closed
 
@@ -118,13 +132,13 @@ Reviewed, judged not reachable in this deployment, and left alone:
 ## 6. Verification
 
 ```
-pnpm verify          # typecheck + build + 205 tests + package contract
+pnpm verify          # typecheck + build + 216 tests + package contract
 ```
 
-New tests live in `tests/fail-open-regressions.spec.ts`: 37 cases, most of them
-direct/wrapped pairs, plus the protected-metadata and compatibility-matrix
-invariants. The suite went from 168 passing to 205 passing with no upstream
-test modified.
+New tests live in `tests/fail-open-regressions.spec.ts`: 38 cases, most of them
+direct/wrapped pairs, plus the protected-metadata and container/VM invariants.
+Upstream `0.1.10` runs 178 passing / 27 skipped; this branch runs 216 passing /
+27 skipped, with no upstream test modified.
 
 One claim from adversarial review did **not** reproduce and is not "fixed":
 `cat <<'EOF' > .git/hooks/pre-commit` is already `deny` (the decompose path
@@ -186,19 +200,32 @@ findings they had raised against the first revision:
   `cat .env` reviews. This deliberately adds a review step to routine pipelines
   such as `ls | xargs grep TODO`.
 
+A fourth pass closed the container/VM gap this record previously listed as its
+most severe open item. `docker run -v /:/host …` was a silent `allow`, and
+`docker info` succeeds from inside the macOS Seatbelt profile, so the daemon is
+reachable and the write lands on the host unreviewed — the plugin's premise that
+an unrecognized command is contained by `workspace-write` is simply false for
+these tools. Now:
+
+- `docker`, `podman`, `nerdctl`, `ctr`, `crictl`, `lima`, `limactl`, `colima`
+  and `multipass` no longer reach the final allow. The privileged and
+  host-namespace flags (`--privileged`, `--pid/--net/--userns/--ipc/--uts/--cgroupns=host`,
+  `--device`, `--cap-add`, `--security-opt`) are denied outright.
+- A bind mount whose host source is a filesystem root, the home directory, or a
+  system or credential-critical path is denied, covering `-v`, `--volume`,
+  `--volume=` and `--mount type=bind,source=…`.
+- Any other execution subcommand is reviewed rather than allowed, including an
+  in-workspace bind mount: the image is fetched and run outside the sandbox, the
+  same reason an ephemeral downloaded package is already escalated.
+- State inspection (`docker ps`, `docker images`, `docker --version`) keeps the
+  fast path.
+
 ## 8. Known remaining gaps
 
 Ordered by severity. None is a regression from this fork; each is reachable on
 the deployment this was tested on unless noted.
 
-1. **Container/VM CLIs escape the sandbox entirely.** `docker run -v /:/host …`
-   is a silent `allow`, and the daemon is reachable from inside Seatbelt
-   (`(allow default)` permits the socket), so the file effects happen on the
-   host outside the sandbox. `docker` matches no risky-name list, so it takes
-   the final allow. `podman`/`nerdctl`/`colima` behave the same way. This breaks
-   the plugin's central premise — "unrecognized commands are contained by the
-   `workspace-write` sandbox" — for any tool that delegates work to a daemon.
-2. **The inline/opaque interpreter fallback is still allow-by-default.** The
+1. **The inline/opaque interpreter fallback is still allow-by-default.** The
    PR adds detectors for the effects it knows (`INLINE_CODE_NETWORK`,
    `INLINE_CODE_SENSITIVE_READ`, `SHELL_EXECUTION_DESTRUCTIVE`), but an inline
    source that matches none of them is allowed. Detector gaps therefore become
@@ -210,26 +237,26 @@ the deployment this was tested on unless noted.
    change the fail-open audit judged highest-leverage — is a deliberate design
    decision not taken here, because it escalates every unrecognized inline
    script to the classifier.
-3. **Protected metadata is gated per verb, not on the write itself.** Redirection,
+2. **Protected metadata is gated per verb, not on the write itself.** Redirection,
    `mkdir`/`touch`, `cp`/`mv`, and the file tools are covered; `tee`,
    `sed -i`, `dd of=`, and `truncate` reaching `.git/config` or a hook are not.
-4. **Default-allow for unknown registered tools** (`src/policy.ts`). MCP is not
+3. **Default-allow for unknown registered tools** (`src/policy.ts`). MCP is not
    composed in this deployment, so the fallback is unreachable here — but
    `dsh-mcp-client` spawns servers with `StdioClientTransport` and never calls
    `ctx.sandbox.confine`, so MCP tools would run **unsandboxed**, and this
    fallback becomes a real hole the moment MCP is composed.
-5. `web_search` remains exempt from the credential-material hard deny
+4. `web_search` remains exempt from the credential-material hard deny
    (`src/policy.ts` matches only `web_fetch`/`curl`/`wget`), so a credential in
    a search query is still not hard-denied.
-6. Unrecognized destructive commands that are neither deletions nor
+5. Unrecognized destructive commands that are neither deletions nor
    network-touching (`chmod -R 000 ./src`, `dd of=./important.db`) still fall
    through to the final allow. Inside the workspace the sandbox permits them.
-7. A URL query string containing `token=`/`secret=` is an unrecoverable hard
+6. A URL query string containing `token=`/`secret=` is an unrecoverable hard
    deny (`curl "https://api.invalid/?token=abc"`). Pre-existing; narrowing it
    without reopening the exfil path needs a smarter credential-shape rule.
-8. Attached interpreter flags (`python3 -c'…'`, `perl -e'…'`) merge into one
+7. Attached interpreter flags (`python3 -c'…'`, `perl -e'…'`) merge into one
    lexer word, so the anchored flag match misses and the source is lost: such a
    call is `ask` rather than `deny`. Fail-closed, but weaker than the spaced form.
-9. Install risk is unchanged and low: no `preinstall`/`postinstall`, sole
+8. Install risk is unchanged and low: no `preinstall`/`postinstall`, sole
    runtime dependency `@deepseek-ai/schemastery`, and `prepare` only runs for
    git-source installs.

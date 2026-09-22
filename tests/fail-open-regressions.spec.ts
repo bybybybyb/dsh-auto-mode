@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ArtifactRegistry } from '../src/artifacts.js'
 import { isProtectedProjectPath, resolveRoots } from '../src/paths.js'
@@ -169,22 +167,6 @@ describe('protected project metadata is recognized at any depth', () => {
   it('leaves ordinary source writable', () => {
     expect(isProtectedProjectPath('/work/repo/src/index.ts', roots)).toBe(false)
     expect(isProtectedProjectPath('/work/repo/packages/app/git/config', roots)).toBe(false)
-  })
-})
-
-describe('the supported host matrix covers the cohort npm actually resolves', () => {
-  const compatibility = JSON.parse(readFileSync(resolve(import.meta.dirname, '../compatibility.json'), 'utf8'))
-  const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, '../package.json'), 'utf8'))
-
-  it('declares 0.1.5-rc.2, which `next` ships and caret ranges resolve to', () => {
-    expect(compatibility.supportedHosts.map((host: { version: string }) => host.version)).toContain('0.1.5-rc.2')
-  })
-
-  it('keeps peer ranges equal to the supported host list', () => {
-    const expected = compatibility.supportedHosts.map((host: { version: string }) => host.version).join(' || ')
-    for (const [name, range] of Object.entries(pkg.peerDependencies)) {
-      if (name.startsWith('@deepseek-ai/dsh')) expect(range).toBe(expected)
-    }
   })
 })
 
