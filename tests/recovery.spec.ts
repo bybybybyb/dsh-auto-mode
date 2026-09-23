@@ -54,6 +54,8 @@ interface Harness {
   readonly commands: readonly string[]
   readonly results: readonly ToolExecutionResult[]
   readonly grantedModes: readonly unknown[]
+  /** Outcome of a mid-call approval request shaped exactly like a widening grant. */
+  readonly grantProbeOutcomes: readonly unknown[]
   readonly readTargets: readonly string[]
   readonly agentFor: (userMessages: readonly string[]) => NonNullable<ToolExecutionInput['agent']>
   autoGuidance(userMessages: readonly string[]): Promise<string | undefined>
@@ -72,8 +74,12 @@ async function createHarness(options: {
   approvalAnswer?: ApprovalAnswer
   /** Cancels the pending call from inside the reviewer, the way a caller cancel arrives. */
   abortDuringClassify?: boolean
+  /** Cancels the pending call but still lets the review succeed, the way a race arrives. */
+  abortOnSuccessfulClassify?: boolean
   /** Adds a downstream `tools/post-execute` listener that blocks the settled result. */
   blockPostExecute?: boolean
+  /** Reason of a synthetic grant-matching approval request issued mid-call. */
+  probeGrantReason?: string
 } = {}): Promise<Harness> {
   const workspace = await mkdtemp(join(tmpdir(), 'dsh-auto-mode-workspace-'))
   const scratch = await mkdtemp(join(tmpdir(), 'dsh-auto-mode-scratch-'))
@@ -88,6 +94,7 @@ async function createHarness(options: {
   const commands: string[] = []
   const results: ToolExecutionResult[] = []
   const grantedModes: unknown[] = []
+  const grantProbeOutcomes: unknown[] = []
   const readTargets: string[] = []
   let abortActiveCall: (() => void) | undefined
   const context = new Context()
@@ -114,6 +121,11 @@ async function createHarness(options: {
       }
       if (options.failClassifier === true) throw new Error('classifier route is unavailable')
       const text = JSON.stringify(classifierDecision(input))
+      if (options.abortOnSuccessfulClassify === true) {
+        // The caller cancelled in the window after the reviewer resolved, so the
+        // review still returns a verdict.
+        abortActiveCall?.()
+      }
       return (async function* () {
         yield { type: 'text-delta', index: 0, text } as const
         yield { type: 'finish', reason: { kind: 'stop' } } as const
@@ -136,6 +148,21 @@ async function createHarness(options: {
   context.on('tools/result', (_exec, result) => {
     results.push(result)
   })
+  if (options.probeGrantReason !== undefined) {
+    // The plugin's own `tools/post-execute` listener runs first and awaits `next()`,
+    // so this probe runs mid-call: after any grant would have been armed and before
+    // `tools/result` retires it. It asks for exactly the grant a widening arms, so a
+    // leaked grant answers it `allowed-once` instead of falling through the waterfall.
+    context.on('tools/post-execute', async (exec, _result, next) => {
+      grantProbeOutcomes.push(await context.waterfall(
+        context,
+        'approval/request',
+        { agent: exec.agent, callId: exec.callId, toolName: exec.name, reason: options.probeGrantReason as string },
+        () => Promise.resolve('no-grant'),
+      ))
+      return next()
+    })
+  }
   if (options.blockPostExecute === true) {
     // Registered after the plugin, so the plugin's own `tools/post-execute` listener
     // sees this downstream block on its way back out.
@@ -308,6 +335,7 @@ async function createHarness(options: {
     commands,
     results,
     grantedModes,
+    grantProbeOutcomes,
     readTargets,
     agentFor,
     async autoGuidance(userMessages) {
@@ -828,14 +856,16 @@ describe('refusal recovery guidance', () => {
   })
 
   it('denies a caller-cancelled widening without prompting, arming a grant, or telling it to escalate', async () => {
-    const cancelled = await createHarness({ abortDuringClassify: true })
+    const target = join(tmpdir(), 'dsh-auto-mode-cancelled-target.txt')
+    const justification = 'write the explicitly requested target ' + target
+    const grantReason = `escalate sandbox to danger-full-access: ${justification}`
+    const cancelled = await createHarness({ abortDuringClassify: true, probeGrantReason: grantReason })
     try {
-      const target = join(cancelled.scratch, 'widened.txt')
       const decision = await cancelled.run('cancelled-widening', 'printf widened > ' + bashQuote(target), [
         '请把结果写入 ' + target + '。',
       ], {
         sandbox_permissions: 'danger-full-access',
-        justification: 'write the explicitly requested target ' + target,
+        justification,
       })
 
       // The caller abandoned the call, so no human should be asked about it and no
@@ -846,13 +876,41 @@ describe('refusal recovery guidance', () => {
       // It was never reviewed, so it must not carry the marker whose guidance tells
       // the model to re-issue the call as an escalation.
       expect(reason).not.toContain('[auto-mode classifier unavailable; action denied]')
-      expect(cancelled.approvalRequests).toEqual([])
-      expect(cancelled.grantedModes).toEqual([])
+      // The probe asks for exactly the grant a widening would arm, mid-call and
+      // before `tools/result` retires one, so `no-grant` is what proves none was
+      // armed. The only approval request in the call is the probe's own.
+      expect(cancelled.grantProbeOutcomes).toEqual(['no-grant'])
+      expect(cancelled.approvalRequests).toHaveLength(1)
       expect(cancelled.commands).toEqual([])
       expect(cancelled.results[cancelled.results.length - 1]).toMatchObject({ isError: true })
       expect(cancelled.results[cancelled.results.length - 1]?.additionalContexts).toBeUndefined()
     } finally {
       await cancelled.dispose()
+    }
+  })
+
+  it('denies a cancellation that raced a successful review, before arming anything', async () => {
+    const target = join(tmpdir(), 'dsh-auto-mode-raced-target.txt')
+    const justification = 'write the explicitly requested target ' + target
+    const grantReason = `escalate sandbox to danger-full-access: ${justification}`
+    const raced = await createHarness({ abortOnSuccessfulClassify: true, probeGrantReason: grantReason })
+    try {
+      const decision = await raced.run('raced-widening', 'printf widened > ' + bashQuote(target), [
+        '请把结果写入 ' + target + '。',
+      ], {
+        sandbox_permissions: 'danger-full-access',
+        justification,
+      })
+
+      // The reviewer did answer, but the caller had already abandoned the call, so the
+      // verdict must be discarded rather than turned into a grant or an approval.
+      expect(raced.classifierCalls).toHaveLength(1)
+      expect(decision).toMatchObject({ kind: 'deny' })
+      expect((decision as { reason: string }).reason).toContain('[auto-mode call cancelled]')
+      expect(raced.grantProbeOutcomes).toEqual(['no-grant'])
+      expect(raced.commands).toEqual([])
+    } finally {
+      await raced.dispose()
     }
   })
 

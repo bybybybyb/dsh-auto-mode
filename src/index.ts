@@ -503,6 +503,15 @@ export function apply(ctx: Context, config: Config = {}): void {
         ...(route === undefined ? {} : { route }),
       }, exec.signal)
       if (failureOwner !== undefined) classifierFailures.delete(failureOwner)
+      // A cancellation that raced a successful review must not arm a grant or raise
+      // an approval for work the caller already abandoned. The harness short-circuits
+      // an already-aborted signal before this waterfall, so only the race is left.
+      if (exec.signal.aborted) {
+        return {
+          kind: 'deny',
+          reason: '[auto-mode call cancelled] the pending tool call was cancelled before the decision could be applied',
+        }
+      }
       if (decision.decision === 'allow') {
         planArtifacts()
         if (widening !== undefined) grants.plan(exec, widening)
