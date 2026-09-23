@@ -12,9 +12,10 @@ function callKey(callId: unknown): string | undefined {
 }
 
 /**
- * Exact bridge from an Auto classifier allow to the official approval seam.
- * A grant is scoped to the same live Agent, tool name, call id, requested mode,
- * and justification. It is consumed once and never changes session policy.
+ * Exact bridge from an Auto decision that has authorized this call — a classifier
+ * `allow`, or a human approval the plugin raised itself — to the official approval
+ * seam. A grant is scoped to the same live Agent, tool name, call id, requested
+ * mode, and justification. It is consumed once and never changes session policy.
  */
 export class AutoApprovalGrants {
   private readonly byAgent = new WeakMap<object, Map<string, PendingGrant>>()
