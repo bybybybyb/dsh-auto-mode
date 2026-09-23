@@ -140,11 +140,11 @@ No extra endpoint or API key is needed by default. Auto uses the current Session
     classifierProvider: deepseek-official
     classifierModel: deepseek-v4-flash
     classifierTimeoutMs: 30000
-    classifierMaxOutputTokens: 2048
+    classifierMaxOutputTokens: 4096
     classifierReasoningEffort: off
 ```
 
-`classifierReasoningEffort` applies to the native in-process classifier only; with `classifierEndpoint` set it is accepted and ignored. It defaults to `off`, which disables thinking so reasoning tokens cannot consume the answer budget, and an empty string inherits the adapter default instead. The pin is checked against the route's advertised efforts first, and an effort the route does not offer falls back to `off` rather than failing every classification on that route. Whenever thinking may be on — a heavier pinned effort, an inherited default that is not `off`, a route that offers no `off`, or a route that publishes no reasoning metadata at all, where the pi-ai adapter warns a thinking provider keeps thinking — the answer cap is raised to 4096. A truncated response is always refused rather than partially trusted: recovering a decision from a partial answer cannot separate the model's own conclusion from text it merely quoted out of untrusted input, so a `max-tokens` finish keeps the fail-closed denial it has always had.
+`classifierReasoningEffort` applies to the native in-process classifier only; with `classifierEndpoint` set it is accepted and ignored. It defaults to `off`, which keeps the classifier from spending the provider's effort on reasoning tokens, and an empty string inherits the adapter default instead. The pin is checked against the route's advertised efforts first; an effort the route does not offer falls back to `off` rather than failing every classification on that route, and a route that offers neither sends no effort. `classifierMaxOutputTokens` defaults to the 4096 ceiling and accepts nothing larger, because reasoning tokens share the answer cap and no route can be proven to have thinking disabled: the pi-ai adapter publishes `off` in its effort list but translates it into *omitting* the reasoning option, so a provider whose own default is to think keeps thinking with `off` selected. A smaller cap is therefore an explicit choice to risk the truncation denial below. A truncated response is always refused rather than partially trusted: recovering a decision from a partial answer cannot separate the model's own conclusion from text it merely quoted out of untrusted input, so a `max-tokens` finish keeps the fail-closed denial it has always had.
 
 See [DESIGN.md](./DESIGN.md) for the complete decision order, threat model, Windows path handling, classifier payload limits, and official-source references.
 
