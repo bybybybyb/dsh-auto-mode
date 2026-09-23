@@ -62,6 +62,12 @@ export interface Config {
   readonly classifierApiKeyEnv?: string
   readonly classifierTimeoutMs?: number
   readonly classifierMaxOutputTokens?: number
+  /**
+   * Effort pinned on native classifier requests. The default `off` keeps thinking
+   * tokens from consuming the answer budget; an empty string inherits the
+   * adapter's own default instead.
+   */
+  readonly classifierReasoningEffort?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -74,7 +80,8 @@ export const Config: z<Config> = z.object({
   classifierModel: z.string(),
   classifierApiKeyEnv: z.string().default('DEEPSEEK_API_KEY'),
   classifierTimeoutMs: z.number().default(30_000),
-  classifierMaxOutputTokens: z.number().default(1_024),
+  classifierMaxOutputTokens: z.number().default(2_048),
+  classifierReasoningEffort: z.string().default('off'),
 })
 
 type AgentSession = NonNullable<ToolExecution['agent']>['session']
@@ -144,14 +151,17 @@ function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
     throw new Error('classifierTimeoutMs must be between 100 and 60000')
   }
-  const maxOutputTokens = config.classifierMaxOutputTokens ?? 1_024
+  const maxOutputTokens = config.classifierMaxOutputTokens ?? 2_048
   if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 64 || maxOutputTokens > 4_096) {
     throw new Error('classifierMaxOutputTokens must be an integer between 64 and 4096')
   }
+  // An empty effort is the documented "inherit the adapter default" spelling.
+  const reasoningEffort = (config.classifierReasoningEffort ?? 'off').trim()
   if (config.classifierEndpoint === undefined || config.classifierEndpoint.trim() === '') {
     return createDshClassifier(ctx.llm, {
       timeoutMs,
       maxOutputTokens,
+      reasoningEffort,
       ...(config.classifierProvider === undefined ? {} : { provider: config.classifierProvider }),
       ...(config.classifierModel === undefined ? {} : { model: config.classifierModel }),
     })

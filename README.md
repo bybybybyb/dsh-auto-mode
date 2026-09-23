@@ -138,8 +138,11 @@ No extra endpoint or API key is needed by default. Auto uses the current Session
     classifierProvider: deepseek-official
     classifierModel: deepseek-v4-flash
     classifierTimeoutMs: 30000
-    classifierMaxOutputTokens: 1024
+    classifierMaxOutputTokens: 2048
+    classifierReasoningEffort: off
 ```
+
+`classifierReasoningEffort` defaults to `off`, which disables thinking on the classifier call so reasoning tokens cannot consume its answer budget; an empty string inherits the adapter default instead. The pin is checked against the route's advertised efforts first, because a route with no reasoning capability rejects any explicit effort, and a route that offers no `off` instead receives the larger 4096-token cap. A truncated response is always refused rather than partially trusted: recovering a decision from a partial answer cannot separate the model's own conclusion from text it merely quoted out of untrusted input, so a `max-tokens` finish keeps the fail-closed denial it has always had.
 
 See [DESIGN.md](./DESIGN.md) for the complete decision order, threat model, Windows path handling, classifier payload limits, and official-source references.
 
