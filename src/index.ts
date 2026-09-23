@@ -155,7 +155,8 @@ function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
   if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 64 || maxOutputTokens > 4_096) {
     throw new Error('classifierMaxOutputTokens must be an integer between 64 and 4096')
   }
-  // An empty effort is the documented "inherit the adapter default" spelling.
+  // An empty effort is the documented "inherit the adapter default" spelling;
+  // the factory validates the value, so a typo fails loudly at composition.
   const reasoningEffort = (config.classifierReasoningEffort ?? 'off').trim()
   if (config.classifierEndpoint === undefined || config.classifierEndpoint.trim() === '') {
     return createDshClassifier(ctx.llm, {

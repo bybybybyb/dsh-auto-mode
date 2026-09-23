@@ -28,10 +28,11 @@ export const DEFAULT_CLASSIFIER_REASONING_EFFORT = 'off'
 interface LlmStreamRuntime {
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
   /**
-   * Optional exact-route capability probe. A route that advertises no reasoning
-   * metadata rejects every explicit effort, so the pin is applied only when the
-   * adapter publishes one. An absent probe keeps a narrow stream-only test seam
-   * working and relies on the rejected-pin retry instead.
+   * Optional exact-route capability probe. Its answer decides whether the `off`
+   * effort may be pinned at all, and in the inherited case it reports which
+   * effort the adapter will apply instead. An absent or failing probe falls back
+   * to pinning anyway and relies on the rejected-pin retry, so a stream-only test
+   * seam still works.
    */
   resolveModelInfo?(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>
 }
@@ -77,9 +78,15 @@ function jsonText(text: string): string {
   return fenced?.[1]?.trim() ?? trimmed
 }
 
-/** Preserve the adapter's stable machine code beside its human-readable message. */
+/**
+ * Rebuild an adapter failure as an Error, keeping every diagnostic field.
+ *
+ * `code` routes the rejected-pin retry; `status` and `requestId` are what let an
+ * operator correlate a provider failure with provider-side logs, so dropping them
+ * here would lose the only handle on a real incident.
+ */
 function finishFailureError(failure: LlmFailure): Error {
-  return Object.assign(new Error(failure.message), { code: failure.code })
+  return Object.assign(new Error(failure.message), failure)
 }
 
 interface CollectedResponse {
@@ -149,25 +156,39 @@ function isUnsupportedEffort(error: unknown): boolean {
 interface EffortPlan {
   /** Effort to send, or undefined to inherit the adapter default. */
   readonly effort?: string
-  /** Whether the call may spend part of its answer budget on reasoning tokens. */
+  /**
+   * Whether the call may spend part of its answer budget on reasoning tokens.
+   *
+   * True unless this plan actually pins `off`. `maxTokens` is a ceiling rather
+   * than a reservation, so over-reserving it costs nothing, while under-reserving
+   * it re-creates the truncation this module exists to avoid.
+   */
   readonly thinkingMayBeOn: boolean
+  /** A capability probe that threw, kept so a later failure can name its cause. */
+  readonly probeFailure?: unknown
 }
 
 /**
  * Decide which effort to pin on this exact route.
  *
- * Harness `resolveCallConfig` materializes the adapter's advertised
+ * Harness `resolveCallWithInfo` (reached through `LlmService.adapterStream`)
+ * materializes the adapter's advertised
  * `defaultEffort` whenever a caller omits one, and the DeepSeek adapter
  * advertises `high`. Reasoning then shares the output cap with the answer, which
  * is what truncated a 1024-token classifier call to `finish_reason: "length"` and
  * failed closed. Pinning `off` puts `thinking: { type: "disabled" }` on the wire
- * instead, but a route with no reasoning metadata rejects *any* explicit effort,
- * so the pin is applied only when the adapter advertises it.
+ * instead, which is the only outcome that proves reasoning cannot consume the cap.
  *
- * `thinkingMayBeOn` drives the answer cap: it is true exactly when an explicit
- * effort other than `off` is in play, or when the route advertises reasoning but
- * cannot disable it. An operator who explicitly configures an empty effort has
- * chosen to inherit the adapter default and keeps their own configured cap.
+ * Every other outcome keeps the larger cap, including two that are easy to get
+ * wrong:
+ *
+ * - An inherited effort (`requested` empty). The adapter's own `defaultEffort`
+ *   then applies, so the probe is consulted for it rather than assumed harmless.
+ * - A route that publishes no reasoning metadata. It rejects *any* explicit
+ *   effort, so nothing is sent — but that is not evidence the provider is not
+ *   thinking. `@deepseek-ai/dsh-llm-pi-ai` documents this exact hazard: selecting
+ *   `off` there means omitting the option, and a provider whose own default is to
+ *   think keeps thinking.
  */
 async function planReasoningEffort(
   runtime: LlmStreamRuntime,
@@ -176,27 +197,42 @@ async function planReasoningEffort(
   requested: string | undefined,
   signal: AbortSignal,
 ): Promise<EffortPlan> {
-  if (requested === undefined || requested === '') return { thinkingMayBeOn: false }
-  const pinned: EffortPlan = { effort: requested, thinkingMayBeOn: requested !== DEFAULT_CLASSIFIER_REASONING_EFFORT }
-  if (runtime.resolveModelInfo === undefined) return pinned
-  let info: LlmResolvedModelInfo
-  try {
-    info = await runtime.resolveModelInfo(provider, model, signal)
-  } catch {
-    // The probe is advisory: an unknown route still gets the pin, and an adapter
-    // that rejects it is retried without the pin.
-    return pinned
+  const inherit = requested === undefined || requested === ''
+  let info: LlmResolvedModelInfo | undefined
+  let probeFailure: unknown
+  if (runtime.resolveModelInfo !== undefined) {
+    try {
+      info = await runtime.resolveModelInfo(provider, model, signal)
+    } catch (error: unknown) {
+      // The probe is advisory: an unknown route still gets the pin, and an adapter
+      // that rejects it is retried without the pin. The failure is kept so a later
+      // classifier error can name it instead of surfacing as an unrelated symptom.
+      probeFailure = error
+    }
   }
   const reasoning = info?.reasoning
-  // Absent reasoning metadata means the route rejects every explicit effort.
-  if (reasoning === undefined) return { thinkingMayBeOn: false }
-  if (reasoning.efforts.some(entry => entry.id === requested)) return pinned
-  const off = reasoning.efforts.find(entry => entry.id === DEFAULT_CLASSIFIER_REASONING_EFFORT)
-  // A route that offers no `off` cannot disable thinking, so it needs the
-  // larger cap and an honest record that reasoning shares it.
-  return off === undefined
-    ? { thinkingMayBeOn: true }
-    : { effort: off.id, thinkingMayBeOn: false }
+  const efforts = Array.isArray(reasoning?.efforts) ? reasoning.efforts : []
+  const withProbe = (plan: EffortPlan): EffortPlan => probeFailure === undefined ? plan : { ...plan, probeFailure }
+
+  if (inherit) {
+    // No effort is sent, so the adapter's default applies. It is off only when the
+    // probe positively reports the `off` effort as that default.
+    const inherited = reasoning?.defaultEffort
+    return withProbe({ thinkingMayBeOn: inherited === undefined || inherited !== DEFAULT_CLASSIFIER_REASONING_EFFORT })
+  }
+  if (info === undefined) {
+    // No probe available, or it failed: keep the pin and rely on the rejected-pin retry.
+    return withProbe({ effort: requested, thinkingMayBeOn: requested !== DEFAULT_CLASSIFIER_REASONING_EFFORT })
+  }
+  // No usable reasoning metadata: the route rejects every explicit effort, so
+  // nothing is sent, and the budget must stay generous.
+  if (reasoning === undefined || efforts.length === 0) return withProbe({ thinkingMayBeOn: true })
+  if (efforts.some(entry => entry.id === requested)) {
+    return withProbe({ effort: requested, thinkingMayBeOn: requested !== DEFAULT_CLASSIFIER_REASONING_EFFORT })
+  }
+  const off = efforts.find(entry => entry.id === DEFAULT_CLASSIFIER_REASONING_EFFORT)
+  // A route that offers no `off` cannot disable thinking, so it needs the larger cap.
+  return withProbe(off === undefined ? { thinkingMayBeOn: true } : { effort: off.id, thinkingMayBeOn: false })
 }
 
 /** Reuse `ctx.llm` for an independent, low-token classifier request. */
@@ -204,6 +240,12 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
   const overridePair = config.provider !== undefined || config.model !== undefined
   if (overridePair && (config.provider === undefined || config.model === undefined)) {
     throw new Error('classifierProvider and classifierModel must be configured together')
+  }
+  const reasoningEffort = config.reasoningEffort?.trim()
+  // A typo here is not inert: it is coerced to `off` on one route and dropped on
+  // another, so both look like a working configuration. Reject it at the seam.
+  if (reasoningEffort !== undefined && reasoningEffort !== '' && !/^[A-Za-z][A-Za-z0-9_-]*$/.test(reasoningEffort)) {
+    throw new Error('classifierReasoningEffort must be an adapter effort id such as "off", or an empty string to inherit the adapter default')
   }
   return {
     async classify(input: ClassifierInput, signal: AbortSignal): Promise<ClassifierDecision> {
@@ -226,12 +268,15 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
         signal: combined,
         ...(effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) }),
       })
+      let probeFailure: unknown
       try {
-        // The capability probe belongs inside this try so a bad adapter result
-        // still reports as a classifier timeout or cancellation.
+        // The probe runs inside this try so a cancellation or timeout it observes is
+        // still translated to the caller-facing wording. Its own metadata failures
+        // are advisory and fall back to the pin — see `planReasoningEffort`.
         const plan = await planReasoningEffort(
-          runtime, route.provider, route.model, config.reasoningEffort ?? DEFAULT_CLASSIFIER_REASONING_EFFORT, combined,
+          runtime, route.provider, route.model, reasoningEffort ?? DEFAULT_CLASSIFIER_REASONING_EFFORT, combined,
         )
+        probeFailure = plan.probeFailure
         try {
           return decisionFromResponse(await collectResponse(runtime, buildOptions(plan.effort, plan.thinkingMayBeOn)))
         } catch (error: unknown) {
@@ -249,7 +294,11 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
         if (timeout.aborted) {
           throw new Error(`classifier timed out after ${config.timeoutMs}ms`, { cause: error })
         }
-        throw error
+        if (probeFailure === undefined) throw error
+        // A failing capability probe would otherwise be reported as the symptom of
+        // whatever the attempt did next.
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(message, { cause: { probeFailure, error } })
       }
     },
   }
