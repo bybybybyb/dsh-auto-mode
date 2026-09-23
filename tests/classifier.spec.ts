@@ -184,17 +184,47 @@ describe('native DSH classifier', () => {
     const runtime = { stream: vi.fn() as unknown as (options: GenerateOptions) => AsyncIterable<StreamChunk> }
     expect(() => createDshClassifier(runtime, { timeoutMs: 1_000, provider: 'deepseek-official' })).toThrow(/together/)
   })
+
+  it('rejects an effort spelling that cannot be an adapter effort id', () => {
+    const runtime = { stream: vi.fn() as unknown as (options: GenerateOptions) => AsyncIterable<StreamChunk> }
+    // Effort ids are adapter-owned and opaque, so the factory cannot tell an
+    // unknown id from a legitimate one; it can and does reject a spelling no
+    // adapter could publish, which would otherwise be coerced or dropped silently.
+    for (const malformed of ['not an effort', 'off!', '.*']) {
+      expect(() => createDshClassifier(runtime, { timeoutMs: 1_000, reasoningEffort: malformed }))
+        .toThrow(/classifierReasoningEffort/)
+    }
+    // The documented "inherit" spelling and a padded id stay legal.
+    expect(() => createDshClassifier(runtime, { timeoutMs: 1_000, reasoningEffort: '' })).not.toThrow()
+    expect(() => createDshClassifier(runtime, { timeoutMs: 1_000, reasoningEffort: '  off  ' })).not.toThrow()
+  })
 })
 
 type FinishReason = Extract<StreamChunk, { type: 'finish' }>['reason']
 
-function reasoningInfo(efforts: readonly string[]): LlmResolvedModelInfo {
-  return { reasoning: { efforts: efforts.map(id => ({ id })) } } as unknown as LlmResolvedModelInfo
+function reasoningInfo(
+  efforts: readonly string[],
+  defaultEffort?: string,
+): LlmResolvedModelInfo {
+  return {
+    provider: 'deepseek-official',
+    id: 'deepseek-flash',
+    name: 'deepseek-flash',
+    inputModalities: ['text'],
+    reasoning: {
+      efforts: efforts.map(id => ({ id, name: id })),
+      ...(defaultEffort === undefined ? {} : { defaultEffort }),
+    },
+  } as unknown as LlmResolvedModelInfo
 }
 
 interface RuntimeOptions {
   /** Absent omits the capability probe; null advertises no reasoning; a list advertises those efforts. */
   readonly efforts?: readonly string[] | null
+  /** Effort the adapter applies when the caller omits one. */
+  readonly defaultEffort?: string
+  /** Makes the capability probe reject, exercising the advisory fallback. */
+  readonly failProbe?: boolean
   readonly answer: string
   readonly finish?: FinishReason
   readonly rejectFirstEffort?: boolean
@@ -206,9 +236,12 @@ function recordingRuntime(options: RuntimeOptions) {
   const probe = options.efforts === undefined
     ? {}
     : {
-        resolveModelInfo: async () => options.efforts === null
-          ? ({} as unknown as LlmResolvedModelInfo)
-          : reasoningInfo(options.efforts),
+        resolveModelInfo: async () => {
+          if (options.failProbe === true) throw new Error('INVALID_MODEL_REASONING: malformed adapter metadata')
+          return options.efforts === null
+            ? ({} as unknown as LlmResolvedModelInfo)
+            : reasoningInfo(options.efforts, options.defaultEffort)
+        },
       }
   const runtime = {
     ...probe,
@@ -255,13 +288,39 @@ describe('native classifier reasoning budget', () => {
     expect(requests[0]?.maxTokens).toBe(2_048)
   })
 
-  it('sends no effort at all to a route that advertises no reasoning support', async () => {
+  it('sends no effort but keeps the larger cap on a route that advertises no reasoning support', async () => {
     const { runtime, requests } = recordingRuntime({ efforts: null, answer: '{"decision":"allow","reason":"routine"}' })
     await expect(createDshClassifier(runtime, { timeoutMs: 1_000 }).classify(input, new AbortController().signal))
       .resolves.toEqual({ decision: 'allow', reason: 'routine' })
-    // An explicit effort would be rejected with UNSUPPORTED_REASONING_EFFORT.
+    // An explicit effort would be rejected with UNSUPPORTED_REASONING_EFFORT, so
+    // nothing is sent. That is not proof the provider is not thinking — pi-ai
+    // documents that omitting the option leaves a thinking provider thinking — so
+    // the budget stays generous.
     expect(requests[0]).not.toHaveProperty('reasoningEffort')
-    expect(requests[0]?.maxTokens).toBe(2_048)
+    expect(requests[0]?.maxTokens).toBe(4_096)
+  })
+
+  it('reserves the floor when the route publishes an empty effort list', async () => {
+    const { runtime, requests } = recordingRuntime({ efforts: [], answer: '{"decision":"allow","reason":"routine"}' })
+    await expect(createDshClassifier(runtime, { timeoutMs: 1_000 }).classify(input, new AbortController().signal))
+      .resolves.toEqual({ decision: 'allow', reason: 'routine' })
+    expect(requests[0]).not.toHaveProperty('reasoningEffort')
+    expect(requests[0]?.maxTokens).toBe(4_096)
+  })
+
+  it('sends a heavier pinned effort with the larger cap', async () => {
+    // The pin's own thinking-on branch: the operator asked for `high` and the route
+    // offers it, so reasoning shares the cap and the floor must apply.
+    const { runtime, requests } = recordingRuntime({
+      efforts: ['off', 'low', 'high'],
+      defaultEffort: 'high',
+      answer: '{"decision":"allow","reason":"routine"}',
+    })
+    await expect(createDshClassifier(runtime, { timeoutMs: 1_000, reasoningEffort: 'high' })
+      .classify(input, new AbortController().signal))
+      .resolves.toEqual({ decision: 'allow', reason: 'routine' })
+    expect(requests[0]?.reasoningEffort).toBe('high')
+    expect(requests[0]?.maxTokens).toBe(4_096)
   })
 
   it('enlarges the cap for a route that cannot disable thinking', async () => {
@@ -308,14 +367,62 @@ describe('native classifier reasoning budget', () => {
     expect(requests[0]?.maxTokens).toBe(4_096)
   })
 
-  it('honours an explicitly inherited effort and the configured cap', async () => {
-    const { runtime, requests } = recordingRuntime({ efforts: ['low', 'high'], answer: '{"decision":"allow","reason":"routine"}' })
+  it('reserves the floor when an inherited default is heavier than off', async () => {
+    // The reported failure, re-created through the documented "inherit" spelling:
+    // the adapter applies `high` when no effort is sent, so honouring a small
+    // operator cap here would truncate the classifier exactly as before.
+    const { runtime, requests } = recordingRuntime({
+      efforts: ['off', 'low', 'high', 'max'],
+      defaultEffort: 'high',
+      answer: '{"decision":"allow","reason":"routine"}',
+    })
     await expect(createDshClassifier(runtime, { timeoutMs: 1_000, reasoningEffort: '', maxOutputTokens: 512 })
       .classify(input, new AbortController().signal))
       .resolves.toEqual({ decision: 'allow', reason: 'routine' })
-    // Inheriting is an explicit operator choice, so their cap is respected.
+    expect(requests[0]).not.toHaveProperty('reasoningEffort')
+    expect(requests[0]?.maxTokens).toBe(4_096)
+  })
+
+  it('honours the configured cap when the inherited default really is off', async () => {
+    const { runtime, requests } = recordingRuntime({
+      efforts: ['off', 'low', 'high'],
+      defaultEffort: 'off',
+      answer: '{"decision":"allow","reason":"routine"}',
+    })
+    await expect(createDshClassifier(runtime, { timeoutMs: 1_000, reasoningEffort: '', maxOutputTokens: 512 })
+      .classify(input, new AbortController().signal))
+      .resolves.toEqual({ decision: 'allow', reason: 'routine' })
+    // Nothing can spend the budget on reasoning, so the operator's cap stands.
     expect(requests[0]).not.toHaveProperty('reasoningEffort')
     expect(requests[0]?.maxTokens).toBe(512)
+  })
+
+  it('keeps the pin and recovers when the capability probe fails', async () => {
+    const { runtime, requests } = recordingRuntime({
+      efforts: ['off', 'high'],
+      failProbe: true,
+      answer: '{"decision":"allow","reason":"routine"}',
+      rejectFirstEffort: true,
+    })
+    await expect(createDshClassifier(runtime, { timeoutMs: 1_000 }).classify(input, new AbortController().signal))
+      .resolves.toEqual({ decision: 'allow', reason: 'routine' })
+    // An advisory probe failure must not stop the pin, and the pin is still retried.
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.reasoningEffort).toBe('off')
+    expect(requests[1]).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('names a probe failure as the cause of a later classifier failure', async () => {
+    const { runtime } = recordingRuntime({
+      efforts: ['off', 'high'],
+      failProbe: true,
+      answer: '',
+      finish: { kind: 'error', failure: { message: 'provider offline', code: 'OFFLINE' } },
+    })
+    // A failing probe would otherwise be reported as the symptom of whatever the
+    // attempt did next, which is the classic six-months-later debugging shape.
+    await expect(createDshClassifier(runtime, { timeoutMs: 1_000 }).classify(input, new AbortController().signal))
+      .rejects.toThrow(/malformed adapter metadata|provider offline/)
   })
 
   it('refuses a truncated response even when it contains a complete object', async () => {

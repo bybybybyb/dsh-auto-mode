@@ -144,7 +144,7 @@ Full access 是用户明确选择的无沙箱、免审批模式，插件不能�
     classifierReasoningEffort: off
 ```
 
-`classifierReasoningEffort` 默认为 `off`，即在该分类调用上关闭 thinking，避免推理 token 吃掉回答预算；设为空字符串则改为继承适配器默认值。这个 pin 会先与该路由公布的 effort 列表核对：没有推理能力的路由会拒绝任何显式 effort，而提供了不 `off` 的路由则改用 4096 的更大上限。截断的响应一律拒绝、不做部分信任：从残缺回答里抢救结论，无法区分这是模型自己的判断还是它只是引用了不可信输入里的文本，因此 `max-tokens` 始终是它本来那样的 fail-closed 拒绝。
+`classifierReasoningEffort` 只作用于进程内的原生分类器；一旦设置了 `classifierEndpoint`，它会被接受但被忽略。它默认为 `off`，即关闭 thinking，避免推理 token 吃掉回答预算；设为空字符串则改为继承适配器默认值。这个 pin 会先与该路由公布的 effort 列表核对；如果路由没有提供该 effort，会回退到 `off`，而不是让该路由上的每一次分类都失败。只要 thinking 可能开启——固定了更重的 effort、继承到的默认值不是 `off`、路由未提供 `off`，或者路由根本不公布推理元数据（pi-ai 适配器明确警告：此时一个默认就会思考的 provider 仍会思考）——回答上限就会提高到 4096。截断的响应一律拒绝、不做部分信任：从残缺回答里抢救结论，无法区分这是模型自己的判断还是它只是引用了不可信输入里的文本，因此 `max-tokens` 始终是它本来那样的 fail-closed 拒绝。
 
 完整决策顺序、威胁模型、Windows 路径处理、分类器载荷限制和官方源码依据见 [DESIGN.md](./DESIGN.md)。
 
