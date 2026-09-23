@@ -8,7 +8,6 @@ import { AUTO_MODE_AGENT_GUIDANCE } from '../src/index.js'
 import {
   DEFAULT_CLASSIFIER_MAX_OUTPUT_TOKENS,
   DEFAULT_CLASSIFIER_REASONING_EFFORT,
-  REASONING_CLASSIFIER_MAX_OUTPUT_TOKENS,
 } from '../src/dsh-classifier.js'
 import { provideTestPermissionPresets } from './harness.js'
 
@@ -68,7 +67,22 @@ describe('classifier configuration contract', () => {
       classifierMaxOutputTokens: DEFAULT_CLASSIFIER_MAX_OUTPUT_TOKENS,
       classifierReasoningEffort: DEFAULT_CLASSIFIER_REASONING_EFFORT,
     })
-    // The 4096 ceiling in src/index.ts is the literal twin of this constant.
-    expect(REASONING_CLASSIFIER_MAX_OUTPUT_TOKENS).toBe(4_096)
+    expect(AutoMode.resolveClassifierBudget({})).toMatchObject({
+      timeoutMs: 30_000,
+      maxOutputTokens: DEFAULT_CLASSIFIER_MAX_OUTPUT_TOKENS,
+      reasoningEffort: DEFAULT_CLASSIFIER_REASONING_EFFORT,
+    })
+  })
+
+  it('accepts exactly the documented cap range and rejects anything outside it', () => {
+    // The 4096 in src/index.ts is a literal twin of the exported ceiling; tying the
+    // largest accepted value to it makes an edit to either side fail here.
+    const ceiling = DEFAULT_CLASSIFIER_MAX_OUTPUT_TOKENS
+    expect(AutoMode.resolveClassifierBudget({ classifierMaxOutputTokens: 64 }).maxOutputTokens).toBe(64)
+    expect(AutoMode.resolveClassifierBudget({ classifierMaxOutputTokens: ceiling }).maxOutputTokens).toBe(ceiling)
+    expect(() => AutoMode.resolveClassifierBudget({ classifierMaxOutputTokens: ceiling + 1 })).toThrow(/64 and 4096/)
+    expect(() => AutoMode.resolveClassifierBudget({ classifierMaxOutputTokens: 63 })).toThrow(/64 and 4096/)
+    expect(() => AutoMode.resolveClassifierBudget({ classifierMaxOutputTokens: 1.5 })).toThrow(/64 and 4096/)
+    expect(() => AutoMode.resolveClassifierBudget({ classifierTimeoutMs: 99 })).toThrow(/100 and 60000/)
   })
 })

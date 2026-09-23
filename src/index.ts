@@ -80,7 +80,7 @@ export const Config: z<Config> = z.object({
   classifierModel: z.string(),
   classifierApiKeyEnv: z.string().default('DEEPSEEK_API_KEY'),
   classifierTimeoutMs: z.number().default(30_000),
-  classifierMaxOutputTokens: z.number().default(2_048),
+  classifierMaxOutputTokens: z.number().default(4_096),
   classifierReasoningEffort: z.string().default('off'),
 })
 
@@ -146,18 +146,34 @@ export function autoPermissionAuthority(
   return undefined
 }
 
-function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
+/**
+ * Validate the classifier request controls before any of them is used.
+ *
+ * `classifierMaxOutputTokens` defaults to the 4096 ceiling and accepts nothing
+ * larger: reasoning tokens share the answer cap, and no route can be proven to
+ * have thinking disabled (the pi-ai adapter translates the pinned `off` into
+ * *omitting* the reasoning option), so a smaller value is an explicit operator
+ * choice to risk the `finish_reason: "length"` denial this plugin exists to avoid.
+ */
+export function resolveClassifierBudget(
+  config: Pick<Config, 'classifierTimeoutMs' | 'classifierMaxOutputTokens' | 'classifierReasoningEffort'>,
+): { readonly timeoutMs: number; readonly maxOutputTokens: number; readonly reasoningEffort: string } {
   const timeoutMs = config.classifierTimeoutMs ?? 30_000
   if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
     throw new Error('classifierTimeoutMs must be between 100 and 60000')
   }
-  const maxOutputTokens = config.classifierMaxOutputTokens ?? 2_048
+  const maxOutputTokens = config.classifierMaxOutputTokens ?? 4_096
   if (!Number.isInteger(maxOutputTokens) || maxOutputTokens < 64 || maxOutputTokens > 4_096) {
     throw new Error('classifierMaxOutputTokens must be an integer between 64 and 4096')
   }
-  // An empty effort is the documented "inherit the adapter default" spelling;
-  // the factory validates the value, so a typo fails loudly at composition.
-  const reasoningEffort = (config.classifierReasoningEffort ?? 'off').trim()
+  // An empty effort is the documented "inherit the adapter default" spelling. The
+  // native factory validates the spelling when it is constructed; with
+  // `classifierEndpoint` set the value is accepted and ignored.
+  return { timeoutMs, maxOutputTokens, reasoningEffort: (config.classifierReasoningEffort ?? 'off').trim() }
+}
+
+function classifierFrom(ctx: Context, config: Config): SafetyClassifier {
+  const { timeoutMs, maxOutputTokens, reasoningEffort } = resolveClassifierBudget(config)
   if (config.classifierEndpoint === undefined || config.classifierEndpoint.trim() === '') {
     return createDshClassifier(ctx.llm, {
       timeoutMs,
