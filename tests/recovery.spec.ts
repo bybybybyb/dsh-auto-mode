@@ -67,7 +67,14 @@ interface Harness {
 /** The composed approval answer, mirroring `ctx.approval.request`'s outcome vocabulary. */
 type ApprovalAnswer = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
 
-async function createHarness(options: { failClassifier?: boolean; approvalAnswer?: ApprovalAnswer } = {}): Promise<Harness> {
+async function createHarness(options: {
+  failClassifier?: boolean
+  approvalAnswer?: ApprovalAnswer
+  /** Cancels the pending call from inside the reviewer, the way a caller cancel arrives. */
+  abortDuringClassify?: boolean
+  /** Adds a downstream `tools/post-execute` listener that blocks the settled result. */
+  blockPostExecute?: boolean
+} = {}): Promise<Harness> {
   const workspace = await mkdtemp(join(tmpdir(), 'dsh-auto-mode-workspace-'))
   const scratch = await mkdtemp(join(tmpdir(), 'dsh-auto-mode-scratch-'))
   const dshHome = join(await mkdtemp(join(tmpdir(), 'dsh-auto-mode-home-')), '.dsh')
@@ -82,6 +89,7 @@ async function createHarness(options: { failClassifier?: boolean; approvalAnswer
   const results: ToolExecutionResult[] = []
   const grantedModes: unknown[] = []
   const readTargets: string[] = []
+  let abortActiveCall: (() => void) | undefined
   const context = new Context()
   provideTestPermissionPresets(context)
   context.provide('agents', { get: () => undefined })
@@ -99,6 +107,11 @@ async function createHarness(options: { failClassifier?: boolean; approvalAnswer
       const block = generate.messages[0]?.content[0]
       const input = JSON.parse(block?.type === 'text' ? block.text : '{}') as ClassifierInput
       classifierCalls.push(input)
+      if (options.abortDuringClassify === true) {
+        // A caller abandons the tool call while the reviewer is still working.
+        abortActiveCall?.()
+        throw new Error('DeepSeek request aborted by caller')
+      }
       if (options.failClassifier === true) throw new Error('classifier route is unavailable')
       const text = JSON.stringify(classifierDecision(input))
       return (async function* () {
@@ -123,6 +136,14 @@ async function createHarness(options: { failClassifier?: boolean; approvalAnswer
   context.on('tools/result', (_exec, result) => {
     results.push(result)
   })
+  if (options.blockPostExecute === true) {
+    // Registered after the plugin, so the plugin's own `tools/post-execute` listener
+    // sees this downstream block on its way back out.
+    context.on('tools/post-execute', () => Promise.resolve({
+      kind: 'block' as const,
+      feedback: [{ type: 'text' as const, text: 'blocked by a downstream policy' }],
+    }))
+  }
 
   let decision: PreToolDecision | undefined
   context.on('tools/pre-execute', async (_exec, next) => {
@@ -255,13 +276,16 @@ async function createHarness(options: { failClassifier?: boolean; approvalAnswer
     userMessages: readonly string[],
   ): Promise<PreToolDecision> => {
     decision = undefined
+    const controller = new AbortController()
+    abortActiveCall = () => controller.abort()
     await context.tools.execute({
       callId: ToolCallId(id),
       name,
       arguments: args,
       agent: agentFor(userMessages),
-      signal: new AbortController().signal,
+      signal: controller.signal,
     })
+    abortActiveCall = undefined
     return decision as PreToolDecision
   }
 
@@ -592,6 +616,9 @@ describe('refusal recovery guidance', () => {
       expect(active.readTargets).toEqual([])
       expect(active.results[active.results.length - 1]).toMatchObject({ isError: true })
       expect(active.approvalRequests).toHaveLength(1)
+      // An ask a human decided is not a refusal, so the denial the harness derives
+      // from the unanswered prompt earns no classifier-recovery notice.
+      expect(active.results[active.results.length - 1]?.additionalContexts).toBeUndefined()
     } finally {
       await active.dispose()
     }
@@ -608,6 +635,7 @@ describe('refusal recovery guidance', () => {
       expect(decision).toMatchObject({ kind: 'ask' })
       expect(active.readTargets).toEqual([])
       expect(active.approvalRequests).toHaveLength(1)
+      expect(active.results[active.results.length - 1]?.additionalContexts).toBeUndefined()
     } finally {
       await active.dispose()
     }
@@ -750,6 +778,84 @@ describe('refusal recovery guidance', () => {
     }
   })
 
+  it('attaches no refusal notice when a human declines the classifier ask', async () => {
+    const declining = await createHarness({ approvalAnswer: 'rejected' })
+    try {
+      const target = join(declining.scratch, 'widened.txt')
+      const command = 'printf ask-me > ' + bashQuote(target)
+      const decision = await declining.run('classifier-ask-declined', command, [
+        '请把结果写入 ' + target + '。',
+      ], {
+        sandbox_permissions: 'danger-full-access',
+        justification: 'write the explicitly requested target ' + target,
+      })
+
+      // An ask a human decided is not a refusal, so it must not earn the
+      // escalation notice: the harness's own "the user rejected" text says what to do.
+      expect(decision).toMatchObject({ kind: 'ask' })
+      expect(declining.approvalRequests).toHaveLength(1)
+      expect(declining.commands).toEqual([])
+      expect(declining.results[declining.results.length - 1]).toMatchObject({ isError: true })
+      expect(declining.results[declining.results.length - 1]?.additionalContexts).toBeUndefined()
+    } finally {
+      await declining.dispose()
+    }
+  })
+
+  it('keeps the recovery notice when a downstream post-execute policy blocks the denial', async () => {
+    const blocked = await createHarness({ blockPostExecute: true })
+    try {
+      const target = join(blocked.scratch, 'widened.txt')
+      const command = 'printf deny-me > ' + bashQuote(target)
+      const decision = await blocked.run('classifier-deny-blocked', command, [
+        '请把结果写入 ' + target + '。',
+      ], {
+        sandbox_permissions: 'danger-full-access',
+        justification: 'write the explicitly requested target ' + target,
+      })
+
+      expect(decision).toMatchObject({ kind: 'deny' })
+      const result = blocked.results[blocked.results.length - 1]
+      expect(result).toMatchObject({ isError: true, error: { message: 'blocked by a downstream policy' } })
+      // The harness keeps only the blocking decision's own contexts, so the notice
+      // survives solely because the refusal decision attaches it on that path too.
+      expect(result?.additionalContexts?.[0]).toMatchObject({
+        content: [{ type: 'text', text: AutoMode.AUTO_MODE_ESCALATION_DENIAL_RECOVERY_CONTEXT }],
+      })
+    } finally {
+      await blocked.dispose()
+    }
+  })
+
+  it('denies a caller-cancelled widening without prompting, arming a grant, or telling it to escalate', async () => {
+    const cancelled = await createHarness({ abortDuringClassify: true })
+    try {
+      const target = join(cancelled.scratch, 'widened.txt')
+      const decision = await cancelled.run('cancelled-widening', 'printf widened > ' + bashQuote(target), [
+        '请把结果写入 ' + target + '。',
+      ], {
+        sandbox_permissions: 'danger-full-access',
+        justification: 'write the explicitly requested target ' + target,
+      })
+
+      // The caller abandoned the call, so no human should be asked about it and no
+      // grant may be armed for work that can never be dispatched.
+      expect(decision).toMatchObject({ kind: 'deny' })
+      const reason = (decision as { reason: string }).reason
+      expect(reason).toContain('[auto-mode call cancelled]')
+      // It was never reviewed, so it must not carry the marker whose guidance tells
+      // the model to re-issue the call as an escalation.
+      expect(reason).not.toContain('[auto-mode classifier unavailable; action denied]')
+      expect(cancelled.approvalRequests).toEqual([])
+      expect(cancelled.grantedModes).toEqual([])
+      expect(cancelled.commands).toEqual([])
+      expect(cancelled.results[cancelled.results.length - 1]).toMatchObject({ isError: true })
+      expect(cancelled.results[cancelled.results.length - 1]?.additionalContexts).toBeUndefined()
+    } finally {
+      await cancelled.dispose()
+    }
+  })
+
   it('never lets a tool earn trusted guidance with refusal-marker-shaped error text', async () => {
     const active = await createHarness()
     try {
@@ -821,6 +927,7 @@ describe('refusal recovery guidance', () => {
       '[auto-mode classifier deny]',
       '[auto-mode classifier unavailable; action denied]',
       '[auto-mode hard deny]',
+      '[auto-mode call cancelled]',
     ]) {
       expect(guidance, marker).toContain(marker)
     }
