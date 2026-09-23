@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ProviderRequestId, ReasoningEffortId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { LlmError, ProviderRequestId, ReasoningEffortId, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { CLASSIFIER_SYSTEM_PROMPT, createHttpClassifier, parseClassifierDecision, sanitizeClassifierArguments, sanitizeClassifierText } from '../src/classifier.js'
 import { DEFAULT_CLASSIFIER_MAX_OUTPUT_TOKENS, createDshClassifier } from '../src/dsh-classifier.js'
 
@@ -428,9 +428,12 @@ describe('native classifier reasoning budget', () => {
       .rejects.toMatchObject({ code: 'OFFLINE', cause: { probeFailure: expect.any(Error) } })
   })
 
-  it('keeps a provider failure status and request id', async () => {
+  it('keeps a provider failure status and request id through the probe-failure wrapper', async () => {
     const { runtime } = recordingRuntime({
       efforts: ['off', 'high'],
+      // The wrapper only runs when the probe failed; without this the original error
+      // is rethrown untouched and the assertion below would not exercise it.
+      failProbe: true,
       answer: '',
       finish: {
         kind: 'error',
@@ -445,7 +448,47 @@ describe('native classifier reasoning budget', () => {
     // These are the only handles an operator has for correlating the failure with
     // provider-side logs, so rebuilding the error must not drop them.
     await expect(createDshClassifier(runtime, { timeoutMs: 1_000 }).classify(input, new AbortController().signal))
-      .rejects.toMatchObject({ message: 'provider overloaded', code: 'RATE_LIMIT', status: 503, requestId: 'req-1' })
+      .rejects.toMatchObject({
+        message: 'provider overloaded',
+        code: 'RATE_LIMIT',
+        status: 503,
+        requestId: 'req-1',
+        cause: { probeFailure: expect.any(Error) },
+      })
+  })
+
+  it('keeps an adapter failure record without pretending to be that error class', async () => {
+    const failure = {
+      message: 'provider overloaded',
+      code: 'RATE_LIMIT',
+      status: 503,
+      requestId: ProviderRequestId('req-2'),
+    }
+    const runtime = {
+      resolveModelInfo: async () => { throw new Error('INVALID_MODEL_REASONING: malformed adapter metadata') },
+      // The real adapter throws a typed `LlmError`, whose own enumerable `failure`
+      // record carries the validated provider facts.
+      stream(): AsyncIterable<StreamChunk> {
+        return (async function* () {
+          throw new LlmError(failure.message, failure.code, {
+            status: failure.status,
+            requestId: failure.requestId,
+          })
+        })()
+      },
+    }
+    const rejection = await createDshClassifier(runtime, { timeoutMs: 1_000 })
+      .classify(input, new AbortController().signal).catch((error: unknown) => error)
+    const wrapped = rejection as Error & { code?: unknown; failure?: unknown }
+    expect(wrapped.message).toBe('provider overloaded')
+    expect(wrapped.code).toBe('RATE_LIMIT')
+    // `status` and `requestId` live inside the adapter's own `failure` record; the
+    // wrapper must carry that whole record rather than only the routing code.
+    expect(wrapped.failure).toEqual(failure)
+    // The wrapper is a plain Error, not a counterfeit `LlmError`: a consumer that
+    // switches on the class must not be fooled by a copied `name`.
+    expect(rejection).not.toBeInstanceOf(LlmError)
+    expect(wrapped.name).toBe('Error')
   })
 
   it('refuses a truncated response even when it contains a complete object', async () => {

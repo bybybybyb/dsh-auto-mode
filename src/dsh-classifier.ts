@@ -18,8 +18,10 @@ import type { ClassifierDecision, ClassifierInput, SafetyClassifier } from './ty
  * effort list yet translates it into *omitting* the reasoning option, so a
  * provider whose own default is to think keeps thinking with `off` selected. The
  * default is therefore the reasoning ceiling itself. `maxTokens` is a ceiling
- * rather than a reservation, so the headroom costs nothing, while a smaller value
- * re-creates the `finish_reason: "length"` denial this module exists to avoid.
+ * rather than a reservation, so the headroom is free on a route where thinking
+ * really is off, and on one where it is not it is the difference between a
+ * truncated answer and a complete one — while a smaller value re-creates the
+ * `finish_reason: "length"` denial this module exists to avoid.
  */
 export const DEFAULT_CLASSIFIER_MAX_OUTPUT_TOKENS = 4_096
 /** Effort pinned on classifier requests unless configuration overrides it. */
@@ -87,6 +89,26 @@ function jsonText(text: string): string {
  */
 function finishFailureError(failure: LlmFailure): Error {
   return Object.assign(new Error(failure.message), failure)
+}
+
+/** Diagnostics an adapter failure can carry that are worth preserving on a rebuild. */
+const FAILURE_DIAGNOSTIC_FIELDS = ['code', 'failure', 'status', 'providerRetryAfterMs', 'requestId'] as const
+
+/**
+ * Carry an adapter failure's own diagnostics onto a rebuilt error.
+ *
+ * An explicit allow-list rather than spreading the source: a spread would also
+ * copy `name`, leaving a plain `Error` that claims to be an `LlmError` without
+ * being one.
+ */
+function carryFailureDiagnostics(target: Error, source: unknown): Error {
+  if (source === null || typeof source !== 'object') return target
+  const fields = source as Record<string, unknown>
+  const carried = target as unknown as Record<string, unknown>
+  for (const field of FAILURE_DIAGNOSTIC_FIELDS) {
+    if (fields[field] !== undefined) carried[field] = fields[field]
+  }
+  return target
 }
 
 interface CollectedResponse {
@@ -282,11 +304,10 @@ export function createDshClassifier(runtime: LlmStreamRuntime, config: DshClassi
         if (probeFailure === undefined) throw error
         // A failing capability probe would otherwise be reported as the symptom of
         // whatever the attempt did next. The wrapper keeps the original error's own
-        // fields, so the `code`/`failure` correlation a plain rethrow preserved is
-        // still available alongside the probe's cause.
+        // diagnostics, so the `code`/`status`/`requestId` correlation a plain rethrow
+        // preserved is still available alongside the probe's cause.
         const message = error instanceof Error ? error.message : String(error)
-        const wrapped = new Error(message, { cause: { probeFailure, error } })
-        throw error instanceof Error ? Object.assign(wrapped, error) : wrapped
+        throw carryFailureDiagnostics(new Error(message, { cause: { probeFailure, error } }), error)
       }
     },
   }
